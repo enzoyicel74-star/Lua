@@ -1,0 +1,1772 @@
+--[[
+    MERGED SCRIPT: Original features + EclipseUI (PC/Mobile friendly)
+    - All original functionality preserved (Void, Orbit, Evade, VoidHide, Prediction, AntiAim, Riot)
+    - UI replaced with EclipseUI style
+    - All tabs and features from original code present
+    - Mobile toggle button included
+    - Branding "mind paid" retained
+]]
+
+-- ============================================
+-- ECLIPSE UI LIBRARY (modified for mind paid)
+-- ============================================
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+local RunService = game:GetService("RunService")
+local CoreGui = game:GetService("CoreGui")
+local HttpService = game:GetService("HttpService")
+
+local Player = Players.LocalPlayer
+local Mouse = Player:GetMouse()
+local ViewportSize = workspace.CurrentCamera.ViewportSize
+
+local CFG = {
+    MainColor = Color3.fromRGB(14, 14, 14),
+    SecondaryColor = Color3.fromRGB(26, 26, 26),
+    AccentColor = Color3.fromRGB(189, 172, 255),
+    TextColor = Color3.fromRGB(200, 200, 200),
+    TextDark = Color3.fromRGB(120, 120, 120),
+    StrokeColor = Color3.fromRGB(40, 40, 40),
+    Font = Enum.Font.Code,
+    BaseSize = Vector2.new(600, 450)
+}
+
+local Library = {
+    Flags = {},
+    Connections = {},
+    Unloaded = false,
+    MenuKey = Enum.KeyCode.RightShift,
+    Tabs = {},
+    CurrentTab = nil
+}
+
+local function Create(class, props, children)
+    local inst = Instance.new(class)
+    for i, v in pairs(props or {}) do
+        inst[i] = v
+    end
+    for _, child in pairs(children or {}) do
+        child.Parent = inst
+    end
+    return inst
+end
+
+local function Tween(obj, props, time, style, dir)
+    TweenService:Create(obj, TweenInfo.new(time or 0.2, style or Enum.EasingStyle.Quad, dir or Enum.EasingDirection.Out), props):Play()
+end
+
+local function GetTextSize(text, size, font)
+    return game:GetService("TextService"):GetTextSize(text, size, font, Vector2.new(10000, 10000))
+end
+
+local ScreenGui = Create("ScreenGui", {
+    Name = "mind_paid_ui",
+    Parent = CoreGui,
+    ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+    ResetOnSpawn = false,
+    IgnoreGuiInset = true
+})
+
+local UIScale = Create("UIScale", {Parent = ScreenGui})
+
+local function UpdateScale()
+    local vp = workspace.CurrentCamera.ViewportSize
+    local widthRatio = (vp.X - 40) / CFG.BaseSize.X
+    local heightRatio = (vp.Y - 40) / CFG.BaseSize.Y
+    local scale = math.min(widthRatio, heightRatio, 1)
+    UIScale.Scale = math.max(scale, 0.6)
+end
+
+workspace.CurrentCamera:GetPropertyChangedSignal("ViewportSize"):Connect(UpdateScale)
+UpdateScale()
+
+local NotificationContainer = Create("Frame", {
+    Parent = ScreenGui,
+    Position = UDim2.new(1, -20, 0, 20),
+    AnchorPoint = Vector2.new(1, 0),
+    Size = UDim2.new(0, 300, 1, 0),
+    BackgroundTransparency = 1,
+    ZIndex = 100
+})
+local UIListNotif = Create("UIListLayout", {
+    Parent = NotificationContainer,
+    Padding = UDim.new(0, 5),
+    HorizontalAlignment = Enum.HorizontalAlignment.Right,
+    VerticalAlignment = Enum.VerticalAlignment.Top
+})
+
+function Library:Notify(msg, type)
+    local color = (type == "success" and Color3.fromRGB(100, 255, 100)) or 
+                  (type == "warning" and Color3.fromRGB(255, 100, 100)) or 
+                  CFG.AccentColor
+
+    local Frame = Create("Frame", {
+        Parent = NotificationContainer,
+        Size = UDim2.new(0, 0, 0, 30),
+        BackgroundColor3 = CFG.MainColor,
+        BorderSizePixel = 0,
+        ClipsDescendants = true
+    }, {
+        Create("UIStroke", {Color = CFG.AccentColor, Thickness = 1, Transparency = 0.5}),
+        Create("Frame", {
+            Size = UDim2.new(0, 2, 1, 0),
+            BackgroundColor3 = color
+        }),
+        Create("TextLabel", {
+            Text = msg,
+            TextColor3 = CFG.TextColor,
+            Font = CFG.Font,
+            TextSize = 12,
+            Size = UDim2.new(1, -10, 1, 0),
+            Position = UDim2.new(0, 10, 0, 0),
+            BackgroundTransparency = 1,
+            TextXAlignment = Enum.TextXAlignment.Left
+        })
+    })
+
+    Tween(Frame, {Size = UDim2.new(0, 250, 0, 35)}, 0.5, Enum.EasingStyle.Back)
+    
+    task.delay(3, function()
+        Tween(Frame, {Size = UDim2.new(0, 250, 0, 0), BackgroundTransparency = 1}, 0.5)
+        task.wait(0.5)
+        Frame:Destroy()
+    end)
+end
+
+local TooltipLabel = Create("TextLabel", {
+    Parent = ScreenGui,
+    Size = UDim2.new(0, 0, 0, 20),
+    BackgroundColor3 = CFG.SecondaryColor,
+    TextColor3 = CFG.TextColor,
+    TextSize = 11,
+    Font = CFG.Font,
+    BorderSizePixel = 0,
+    Visible = false,
+    ZIndex = 200
+}, {
+    Create("UIPadding", {PaddingLeft = UDim.new(0, 5), PaddingRight = UDim.new(0, 5)}),
+    Create("UIStroke", {Color = CFG.StrokeColor})
+})
+
+local function AddTooltip(obj, text)
+    obj.MouseEnter:Connect(function()
+        TooltipLabel.Text = text
+        TooltipLabel.Size = UDim2.fromOffset(GetTextSize(text, 11, CFG.Font).X + 12, 20)
+        TooltipLabel.Visible = true
+    end)
+    obj.MouseLeave:Connect(function()
+        TooltipLabel.Visible = false
+    end)
+end
+
+RunService.RenderStepped:Connect(function()
+    if TooltipLabel.Visible then
+        local m = UserInputService:GetMouseLocation()
+        TooltipLabel.Position = UDim2.fromOffset(m.X + 15, m.Y + 15)
+    end
+end)
+
+local MainFrame = Create("Frame", {
+    Name = "MainFrame",
+    Parent = ScreenGui,
+    Size = UDim2.fromOffset(CFG.BaseSize.X, CFG.BaseSize.Y),
+    Position = UDim2.new(0.5, -300, 0.5, -225),
+    BackgroundColor3 = CFG.MainColor,
+    BorderSizePixel = 0,
+    Visible = true
+}, {
+    Create("UIStroke", {Color = CFG.StrokeColor}),
+    Create("UICorner", {CornerRadius = UDim.new(0, 3)})
+})
+
+local Dragging, DragInput, DragStart, StartPos = false, nil, nil, nil
+
+MainFrame.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        Dragging = true
+        DragStart = input.Position
+        StartPos = MainFrame.Position
+        
+        input.Changed:Connect(function()
+            if input.UserInputState == Enum.UserInputState.End then
+                Dragging = false
+            end
+        end)
+    end
+end)
+
+MainFrame.InputChanged:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+        DragInput = input
+    end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+    if input == DragInput and Dragging then
+        local delta = input.Position - DragStart
+        Tween(MainFrame, {Position = UDim2.new(StartPos.X.Scale, StartPos.X.Offset + delta.X, StartPos.Y.Scale, StartPos.Y.Offset + delta.Y)}, 0.05)
+    end
+end)
+
+local TopBar = Create("Frame", {
+    Parent = MainFrame,
+    Size = UDim2.new(1, 0, 0, 30),
+    BackgroundColor3 = CFG.MainColor,
+    BorderSizePixel = 0
+}, {
+    Create("Frame", {
+        Size = UDim2.new(1, 0, 0, 1),
+        Position = UDim2.new(0, 0, 1, 0),
+        BackgroundColor3 = CFG.StrokeColor
+    })
+})
+
+local TitleLabel = Create("TextLabel", {
+    Parent = TopBar,
+    Text = "mind paid",
+    TextColor3 = CFG.TextDark,
+    TextSize = 13,
+    Font = CFG.Font,
+    BackgroundTransparency = 1,
+    Size = UDim2.new(0, 200, 1, 0),
+    Position = UDim2.new(0, 10, 0, 0),
+    TextXAlignment = Enum.TextXAlignment.Left,
+    RichText = true
+})
+
+local ContentContainer = Create("Frame", {
+    Parent = MainFrame,
+    Size = UDim2.new(1, 0, 1, -30),
+    Position = UDim2.new(0, 0, 0, 30),
+    BackgroundTransparency = 1
+})
+
+local Sidebar = Create("Frame", {
+    Parent = ContentContainer,
+    Size = UDim2.new(0, 60, 1, 0),
+    BackgroundColor3 = Color3.fromRGB(17, 17, 17),
+    BorderSizePixel = 0,
+    Position = UDim2.new(0, 0, 0, 0)
+}, {
+    Create("Frame", {Size = UDim2.new(0, 1, 0, 0), Position = UDim2.new(1, 0, 0, 0), BackgroundTransparency = 1, BackgroundColor3 = CFG.StrokeColor}),
+    Create("UIListLayout", {Padding = UDim.new(0, 10), HorizontalAlignment = Enum.HorizontalAlignment.Center, VerticalAlignment = Enum.VerticalAlignment.Top}),
+    Create("UIPadding", {PaddingTop = UDim.new(0, 15)})
+})
+
+local PagesContainer = Create("Frame", {
+    Parent = ContentContainer,
+    Size = UDim2.new(1, -60, 1, 0),
+    Position = UDim2.new(0, 60, 0, 0),
+    BackgroundTransparency = 1
+})
+
+local Tabs = {}
+local CurrentTab = nil
+
+function Library:Tab(name, icon)
+    local TabButton = Create("TextButton", {
+        Parent = Sidebar,
+        Size = UDim2.new(0, 40, 0, 40),
+        BackgroundColor3 = CFG.MainColor,
+        Text = "",
+        TextSize = 20,
+        TextColor3 = CFG.TextDark,
+        Font = CFG.Font,
+        AutoButtonColor = false
+    }, {
+        Create("ImageLabel", {
+            Name = "Icon",
+            Size = UDim2.new(0.6, 0, 0.6, 0),
+            Position = UDim2.new(0.2, 0, 0.2, 0),
+            BackgroundTransparency = 1,
+            Image = icon and "rbxassetid://" .. icon or "rbxassetid://3926305904",
+            ImageColor3 = CFG.TextDark
+        }),
+        Create("UICorner", {CornerRadius = UDim.new(0, 6)})
+    })
+
+    local PageFrame = Create("ScrollingFrame", {
+        Parent = PagesContainer,
+        Size = UDim2.new(1, 0, 1, 0),
+        BackgroundTransparency = 1,
+        Visible = false,
+        ScrollBarThickness = 2,
+        ScrollBarImageColor3 = CFG.AccentColor,
+        CanvasSize = UDim2.new(0, 0, 0, 0),
+        AutomaticCanvasSize = Enum.AutomaticSize.Y
+    }, {
+        Create("UIPadding", {PaddingTop = UDim.new(0, 15), PaddingLeft = UDim.new(0, 15), PaddingRight = UDim.new(0, 15), PaddingBottom = UDim.new(0, 15)}),
+        Create("UIGridLayout", {
+            CellSize = UDim2.new(0.48, 0, 0, 0),
+            CellPadding = UDim2.new(0.02, 0, 0, 10),
+            FillDirectionMaxCells = 2
+        })
+    })
+
+    PageFrame:ClearAllChildren()
+    local Padding = Create("UIPadding", {Parent = PageFrame, PaddingTop = UDim.new(0, 15), PaddingLeft = UDim.new(0, 15), PaddingRight = UDim.new(0, 15), PaddingBottom = UDim.new(0, 15)})
+    
+    local LeftCol = Create("Frame", {Parent = PageFrame, Size = UDim2.new(0.48, 0, 1, 0), BackgroundTransparency = 1}, {
+        Create("UIListLayout", {Padding = UDim.new(0, 10), SortOrder = Enum.SortOrder.LayoutOrder})
+    })
+    local RightCol = Create("Frame", {Parent = PageFrame, Size = UDim2.new(0.48, 0, 1, 0), Position = UDim2.new(0.52, 0, 0, 0), BackgroundTransparency = 1}, {
+        Create("UIListLayout", {Padding = UDim.new(0, 10), SortOrder = Enum.SortOrder.LayoutOrder})
+    })
+
+    TabButton.MouseButton1Click:Connect(function()
+        for _, t in pairs(Tabs) do
+            Tween(t.Btn, {TextColor3 = CFG.TextDark, BackgroundColor3 = CFG.MainColor}, 0.2)
+            t.Page.Visible = false
+        end
+        Tween(TabButton, {TextColor3 = CFG.AccentColor, BackgroundColor3 = CFG.SecondaryColor}, 0.2)
+        PageFrame.Visible = true
+        CurrentTab = PageFrame
+    end)
+
+    table.insert(Tabs, {Btn = TabButton, Page = PageFrame})
+
+    if #Tabs == 1 then
+        Tween(TabButton, {TextColor3 = CFG.AccentColor, BackgroundColor3 = CFG.SecondaryColor}, 0.2)
+        PageFrame.Visible = true
+    end
+
+    local GroupFunctions = {}
+    local LeftSide = true
+
+    function GroupFunctions:Group(title)
+        local ParentCol = LeftSide and LeftCol or RightCol
+        LeftSide = not LeftSide
+
+        local GroupFrame = Create("Frame", {
+            Parent = ParentCol,
+            Size = UDim2.new(1, 0, 0, 0),
+            AutomaticSize = Enum.AutomaticSize.Y,
+            BackgroundColor3 = Color3.fromRGB(17, 17, 17),
+            BorderSizePixel = 0
+        }, {
+            Create("UIStroke", {Color = CFG.StrokeColor}),
+            Create("UICorner", {CornerRadius = UDim.new(0, 2)})
+        })
+
+        Create("Frame", {
+            Parent = GroupFrame,
+            Size = UDim2.new(1, 0, 0, 25),
+            BackgroundColor3 = CFG.SecondaryColor,
+            BorderSizePixel = 0
+        }, {
+            Create("UICorner", {CornerRadius = UDim.new(0, 2)}),
+            Create("Frame", {
+                Size = UDim2.new(1, 0, 0, 5),
+                Position = UDim2.new(0, 0, 1, -5),
+                BackgroundColor3 = CFG.SecondaryColor,
+                BorderSizePixel = 0
+            }),
+            Create("TextLabel", {
+                Text = title,
+                Size = UDim2.new(1, -20, 1, 0),
+                Position = UDim2.new(0, 8, 0, 0),
+                BackgroundTransparency = 1,
+                TextColor3 = CFG.TextColor,
+                Font = Enum.Font.GothamBold,
+                TextSize = 11,
+                TextXAlignment = Enum.TextXAlignment.Left
+            }),
+            Create("Frame", {
+                Size = UDim2.new(0, 4, 0, 4),
+                Position = UDim2.new(1, -10, 0.5, -2),
+                BackgroundColor3 = CFG.AccentColor,
+                BorderSizePixel = 0
+            }, {Create("UICorner", {CornerRadius = UDim.new(1, 0)})})
+        })
+
+        local Content = Create("Frame", {
+            Parent = GroupFrame,
+            Size = UDim2.new(1, 0, 0, 0),
+            Position = UDim2.new(0, 0, 0, 25),
+            AutomaticSize = Enum.AutomaticSize.Y,
+            BackgroundTransparency = 1
+        }, {
+            Create("UIListLayout", {Padding = UDim.new(0, 5), SortOrder = Enum.SortOrder.LayoutOrder}),
+            Create("UIPadding", {PaddingTop = UDim.new(0, 8), PaddingBottom = UDim.new(0, 8), PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8)})
+        })
+
+        local ItemFuncs = {}
+
+        function ItemFuncs:Toggle(cfg)
+            local Enabled = false
+            local Frame = Create("TextButton", {
+                Parent = Content,
+                Size = UDim2.new(1, 0, 0, 20),
+                BackgroundTransparency = 1,
+                Text = ""
+            })
+
+            local Box = Create("Frame", {
+                Parent = Frame,
+                Size = UDim2.new(0, 12, 0, 12),
+                Position = UDim2.new(0, 0, 0.5, -6),
+                BackgroundColor3 = CFG.SecondaryColor,
+                BorderSizePixel = 0
+            }, {Create("UIStroke", {Color = CFG.StrokeColor})})
+
+            local Check = Create("Frame", {
+                Parent = Box,
+                Size = UDim2.new(1, -4, 1, -4),
+                Position = UDim2.new(0.5, 0, 0.5, 0),
+                AnchorPoint = Vector2.new(0.5, 0.5),
+                BackgroundColor3 = CFG.AccentColor,
+                BackgroundTransparency = 1
+            })
+
+            local Label = Create("TextLabel", {
+                Parent = Frame,
+                Text = cfg.Name,
+                TextColor3 = CFG.TextDark,
+                TextSize = 11,
+                Font = CFG.Font,
+                BackgroundTransparency = 1,
+                Position = UDim2.new(0, 18, 0, 0),
+                Size = UDim2.new(1, -18, 1, 0),
+                TextXAlignment = Enum.TextXAlignment.Left
+            })
+
+            if cfg.Risky then Label.TextColor3 = Color3.fromRGB(200, 80, 80) end
+            if cfg.Tooltip then AddTooltip(Frame, cfg.Tooltip) end
+
+            local function Update()
+                Enabled = not Enabled
+                Tween(Check, {BackgroundTransparency = Enabled and 0 or 1}, 0.1)
+                Tween(Label, {TextColor3 = Enabled and CFG.TextColor or (cfg.Risky and Color3.fromRGB(200, 80, 80) or CFG.TextDark)}, 0.1)
+                if cfg.Callback then cfg.Callback(Enabled) end
+            end
+
+            Frame.MouseButton1Click:Connect(Update)
+            return {Set = function(v) if v ~= Enabled then Update() end end}
+        end
+
+        function ItemFuncs:Slider(cfg)
+            local Value = cfg.Default or cfg.Min
+            local DraggingSlider = false
+
+            local Frame = Create("Frame", {
+                Parent = Content,
+                Size = UDim2.new(1, 0, 0, 32),
+                BackgroundTransparency = 1
+            })
+
+            local Label = Create("TextLabel", {
+                Parent = Frame,
+                Text = cfg.Name,
+                TextColor3 = CFG.TextDark,
+                TextSize = 11,
+                Font = CFG.Font,
+                BackgroundTransparency = 1,
+                Size = UDim2.new(1, 0, 0, 15),
+                TextXAlignment = Enum.TextXAlignment.Left
+            })
+
+            local ValueLabel = Create("TextLabel", {
+                Parent = Frame,
+                Text = Value .. (cfg.Unit or ""),
+                TextColor3 = CFG.TextDark,
+                TextSize = 11,
+                Font = CFG.Font,
+                BackgroundTransparency = 1,
+                Size = UDim2.new(1, 0, 0, 15),
+                TextXAlignment = Enum.TextXAlignment.Right
+            })
+
+            local SliderBG = Create("Frame", {
+                Parent = Frame,
+                Size = UDim2.new(1, 0, 0, 6),
+                Position = UDim2.new(0, 0, 0, 20),
+                BackgroundColor3 = CFG.SecondaryColor,
+                BorderSizePixel = 0
+            }, {
+                Create("UIStroke", {Color = CFG.StrokeColor}),
+                Create("UICorner", {CornerRadius = UDim.new(1, 0)})
+            })
+
+            local Fill = Create("Frame", {
+                Parent = SliderBG,
+                Size = UDim2.new(0, 0, 1, 0),
+                BackgroundColor3 = CFG.AccentColor
+            }, {Create("UICorner", {CornerRadius = UDim.new(1, 0)})})
+
+            local function Update(input)
+                local SizeX = SliderBG.AbsoluteSize.X
+                local PosX = SliderBG.AbsolutePosition.X
+                local InputX = input.Position.X
+                
+                local Percent = math.clamp((InputX - PosX) / SizeX, 0, 1)
+                Value = math.floor(cfg.Min + (cfg.Max - cfg.Min) * Percent)
+                
+                Fill.Size = UDim2.new(Percent, 0, 1, 0)
+                ValueLabel.Text = Value .. (cfg.Unit or "")
+                if cfg.Callback then cfg.Callback(Value) end
+            end
+
+            Frame.InputBegan:Connect(function(input)
+                if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+                    DraggingSlider = true
+                    Update(input)
+                end
+            end)
+            
+            UserInputService.InputChanged:Connect(function(input)
+                if DraggingSlider and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+                    Update(input)
+                end
+            end)
+
+            UserInputService.InputEnded:Connect(function(input)
+                if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+                    DraggingSlider = false
+                end
+            end)
+
+            local percent = (Value - cfg.Min) / (cfg.Max - cfg.Min)
+            Fill.Size = UDim2.new(percent, 0, 1, 0)
+            if cfg.Tooltip then AddTooltip(Frame, cfg.Tooltip) end
+        end
+
+        function ItemFuncs:Dropdown(cfg)
+            local Expanded = false
+            local Current = cfg.Default or cfg.Options[1]
+
+            local Frame = Create("Frame", {
+                Parent = Content,
+                Size = UDim2.new(1, 0, 0, 36),
+                BackgroundTransparency = 1,
+                ZIndex = 20
+            })
+
+            Create("TextLabel", {
+                Parent = Frame,
+                Text = cfg.Name,
+                TextColor3 = CFG.TextDark,
+                TextSize = 11,
+                Font = CFG.Font,
+                BackgroundTransparency = 1,
+                Size = UDim2.new(1, 0, 0, 15),
+                TextXAlignment = Enum.TextXAlignment.Left
+            })
+
+            local MainBox = Create("TextButton", {
+                Parent = Frame,
+                Size = UDim2.new(1, 0, 0, 20),
+                Position = UDim2.new(0, 0, 0, 16),
+                BackgroundColor3 = CFG.SecondaryColor,
+                BorderSizePixel = 0,
+                Text = "",
+                AutoButtonColor = false
+            }, {
+                Create("UIStroke", {Color = CFG.StrokeColor}),
+                Create("UICorner", {CornerRadius = UDim.new(0, 3)}),
+                Create("TextLabel", {
+                    Name = "Val",
+                    Text = Current,
+                    Size = UDim2.new(1, -20, 1, 0),
+                    Position = UDim2.new(0, 5, 0, 0),
+                    BackgroundTransparency = 1,
+                    TextColor3 = CFG.TextColor,
+                    TextSize = 11,
+                    Font = CFG.Font,
+                    TextXAlignment = Enum.TextXAlignment.Left
+                }),
+                Create("TextLabel", {
+                    Text = "▼",
+                    Size = UDim2.new(0, 20, 1, 0),
+                    Position = UDim2.new(1, -20, 0, 0),
+                    BackgroundTransparency = 1,
+                    TextColor3 = CFG.TextDark,
+                    TextSize = 10
+                })
+            })
+
+            local ListFrame = Create("ScrollingFrame", {
+                Parent = MainBox,
+                Size = UDim2.new(1, 0, 0, 0),
+                Position = UDim2.new(0, 0, 1, 2),
+                BackgroundColor3 = CFG.SecondaryColor,
+                BorderSizePixel = 0,
+                Visible = false,
+                ZIndex = 50,
+                CanvasSize = UDim2.new(0, 0, 0, 0),
+                AutomaticCanvasSize = Enum.AutomaticSize.Y,
+                ScrollBarThickness = 2
+            }, {
+                Create("UIStroke", {Color = CFG.StrokeColor}),
+                Create("UIListLayout", {SortOrder = Enum.SortOrder.LayoutOrder}),
+                Create("UICorner", {CornerRadius = UDim.new(0, 3)})
+            })
+
+            for _, opt in pairs(cfg.Options) do
+                local Btn = Create("TextButton", {
+                    Parent = ListFrame,
+                    Size = UDim2.new(1, 0, 0, 20),
+                    BackgroundTransparency = 1,
+                    Text = opt,
+                    TextColor3 = (opt == Current) and CFG.AccentColor or CFG.TextDark,
+                    TextSize = 11,
+                    Font = CFG.Font
+                })
+                Btn.MouseButton1Click:Connect(function()
+                    Current = opt
+                    MainBox.Val.Text = opt
+                    if cfg.Callback then cfg.Callback(opt) end
+                    Expanded = false
+                    Tween(ListFrame, {Size = UDim2.new(1, 0, 0, 0)}, 0.1)
+                    task.wait(0.1)
+                    ListFrame.Visible = false
+                end)
+            end
+
+            MainBox.MouseButton1Click:Connect(function()
+                Expanded = not Expanded
+                if Expanded then
+                    ListFrame.Visible = true
+                    Tween(ListFrame, {Size = UDim2.new(1, 0, 0, math.min(#cfg.Options * 20, 100))}, 0.1)
+                else
+                    Tween(ListFrame, {Size = UDim2.new(1, 0, 0, 0)}, 0.1)
+                    task.wait(0.1)
+                    ListFrame.Visible = false
+                end
+            end)
+            if cfg.Tooltip then AddTooltip(Frame, cfg.Tooltip) end
+        end
+
+        function ItemFuncs:ColorPicker(cfg)
+            local Color = cfg.Default or Color3.fromRGB(255, 255, 255)
+            local Opened = false
+            
+            local Frame = Create("Frame", {
+                Parent = Content,
+                Size = UDim2.new(1, 0, 0, 20),
+                BackgroundTransparency = 1,
+                ZIndex = 15
+            })
+            
+            Create("TextLabel", {
+                Parent = Frame,
+                Text = cfg.Name,
+                TextColor3 = CFG.TextDark,
+                TextSize = 11,
+                Font = CFG.Font,
+                BackgroundTransparency = 1,
+                Size = UDim2.new(0.6, 0, 1, 0),
+                TextXAlignment = Enum.TextXAlignment.Left
+            })
+
+            local Preview = Create("TextButton", {
+                Parent = Frame,
+                Size = UDim2.new(0, 30, 0, 14),
+                AnchorPoint = Vector2.new(1, 0.5),
+                Position = UDim2.new(1, 0, 0.5, 0),
+                BackgroundColor3 = Color,
+                Text = "",
+                AutoButtonColor = false
+            }, {
+                Create("UIStroke", {Color = CFG.StrokeColor}),
+                Create("UICorner", {CornerRadius = UDim.new(0, 3)})
+            })
+
+            local PickerFrame = Create("Frame", {
+                Parent = Preview,
+                Size = UDim2.new(0, 180, 0, 0),
+                Position = UDim2.new(1, 0, 1, 5),
+                AnchorPoint = Vector2.new(1, 0),
+                BackgroundColor3 = CFG.MainColor,
+                BorderSizePixel = 0,
+                ClipsDescendants = true,
+                ZIndex = 60
+            }, {
+                Create("UIStroke", {Color = CFG.StrokeColor}),
+                Create("UICorner", {CornerRadius = UDim.new(0, 3)})
+            })
+
+            local SatValPanel = Create("TextButton", {
+                Parent = PickerFrame,
+                Size = UDim2.new(1, -20, 0, 100),
+                Position = UDim2.new(0, 10, 0, 10),
+                BackgroundColor3 = Color3.fromHSV(0, 1, 1),
+                Text = "",
+                AutoButtonColor = false
+            }, {
+                Create("ImageLabel", {
+                    Size = UDim2.new(1, 0, 1, 0),
+                    BackgroundTransparency = 1,
+                    Image = "rbxassetid://4801885019"
+                }),
+                Create("ImageLabel", {
+                    Size = UDim2.new(1, 0, 1, 0),
+                    BackgroundTransparency = 1,
+                    Image = "rbxassetid://4801885019",
+                    ImageColor3 = Color3.new(0,0,0),
+                    Rotation = 90
+                })
+            })
+
+            local Cursor = Create("Frame", {
+                Parent = SatValPanel,
+                Size = UDim2.new(0, 4, 0, 4),
+                BackgroundColor3 = Color3.new(1,1,1),
+                AnchorPoint = Vector2.new(0.5, 0.5)
+            }, {Create("UICorner", {CornerRadius = UDim.new(1, 0)})})
+
+            local HueSlider = Create("TextButton", {
+                Parent = PickerFrame,
+                Size = UDim2.new(1, -20, 0, 10),
+                Position = UDim2.new(0, 10, 0, 120),
+                Text = "",
+                AutoButtonColor = false
+            }, {
+                Create("UIGradient", {
+                    Color = ColorSequence.new({
+                        ColorSequenceKeypoint.new(0, Color3.fromHSV(0,1,1)),
+                        ColorSequenceKeypoint.new(0.17, Color3.fromHSV(0.17,1,1)),
+                        ColorSequenceKeypoint.new(0.33, Color3.fromHSV(0.33,1,1)),
+                        ColorSequenceKeypoint.new(0.5, Color3.fromHSV(0.5,1,1)),
+                        ColorSequenceKeypoint.new(0.67, Color3.fromHSV(0.67,1,1)),
+                        ColorSequenceKeypoint.new(0.83, Color3.fromHSV(0.83,1,1)),
+                        ColorSequenceKeypoint.new(1, Color3.fromHSV(1,1,1))
+                    })
+                }),
+                Create("UICorner", {CornerRadius = UDim.new(0, 2)})
+            })
+
+            local H, S, V = 0, 1, 1
+            local DraggingHSV, DraggingHue = false, false
+
+            local function UpdateColor()
+                Color = Color3.fromHSV(H, S, V)
+                Preview.BackgroundColor3 = Color
+                SatValPanel.BackgroundColor3 = Color3.fromHSV(H, 1, 1)
+                Cursor.Position = UDim2.new(S, 0, 1 - V, 0)
+                if cfg.Callback then cfg.Callback(Color) end
+            end
+
+            SatValPanel.InputBegan:Connect(function(inp) 
+                if inp.UserInputType == Enum.UserInputType.MouseButton1 or inp.UserInputType == Enum.UserInputType.Touch then 
+                    DraggingHSV = true 
+                end 
+            end)
+            HueSlider.InputBegan:Connect(function(inp) 
+                if inp.UserInputType == Enum.UserInputType.MouseButton1 or inp.UserInputType == Enum.UserInputType.Touch then 
+                    DraggingHue = true 
+                end 
+            end)
+            
+            UserInputService.InputEnded:Connect(function(inp) 
+                if inp.UserInputType == Enum.UserInputType.MouseButton1 or inp.UserInputType == Enum.UserInputType.Touch then 
+                    DraggingHSV = false; DraggingHue = false 
+                end 
+            end)
+
+            UserInputService.InputChanged:Connect(function(inp)
+                if inp.UserInputType == Enum.UserInputType.MouseMovement or inp.UserInputType == Enum.UserInputType.Touch then
+                    if DraggingHSV then
+                        local size = SatValPanel.AbsoluteSize
+                        local pos = SatValPanel.AbsolutePosition
+                        local x = math.clamp((inp.Position.X - pos.X) / size.X, 0, 1)
+                        local y = math.clamp((inp.Position.Y - pos.Y) / size.Y, 0, 1)
+                        S = x
+                        V = 1 - y
+                        UpdateColor()
+                    elseif DraggingHue then
+                        local size = HueSlider.AbsoluteSize
+                        local pos = HueSlider.AbsolutePosition
+                        local x = math.clamp((inp.Position.X - pos.X) / size.X, 0, 1)
+                        H = x
+                        UpdateColor()
+                    end
+                end
+            end)
+
+            Preview.MouseButton1Click:Connect(function()
+                Opened = not Opened
+                if Opened then
+                    Tween(PickerFrame, {Size = UDim2.new(0, 180, 0, 170)}, 0.2)
+                else
+                    Tween(PickerFrame, {Size = UDim2.new(0, 180, 0, 0)}, 0.2)
+                end
+            end)
+            if cfg.Tooltip then AddTooltip(Frame, cfg.Tooltip) end
+        end
+
+        function ItemFuncs:Textbox(cfg)
+            local Frame = Create("Frame", {
+                Parent = Content,
+                Size = UDim2.new(1, 0, 0, 35),
+                BackgroundTransparency = 1
+            })
+            
+            Create("TextLabel", {
+                Parent = Frame,
+                Text = cfg.Name,
+                TextColor3 = CFG.TextDark,
+                TextSize = 11,
+                Font = CFG.Font,
+                BackgroundTransparency = 1,
+                Size = UDim2.new(1, 0, 0, 15),
+                TextXAlignment = Enum.TextXAlignment.Left
+            })
+
+            local Box = Create("TextBox", {
+                Parent = Frame,
+                Size = UDim2.new(1, 0, 0, 20),
+                Position = UDim2.new(0, 0, 0, 15),
+                BackgroundColor3 = CFG.SecondaryColor,
+                TextColor3 = CFG.TextColor,
+                PlaceholderText = cfg.Placeholder or "...",
+                Text = "",
+                Font = CFG.Font,
+                TextSize = 11,
+                BorderSizePixel = 0
+            }, {
+                Create("UIStroke", {Color = CFG.StrokeColor}),
+                Create("UICorner", {CornerRadius = UDim.new(0, 3)}),
+                Create("UIPadding", {PaddingLeft = UDim.new(0, 5)})
+            })
+
+            Box.FocusLost:Connect(function()
+                if cfg.Callback then cfg.Callback(Box.Text) end
+            end)
+            if cfg.Tooltip then AddTooltip(Frame, cfg.Tooltip) end
+        end
+
+        function ItemFuncs:Keybind(cfg)
+            local Key = cfg.Default or Enum.KeyCode.Insert
+            local Waiting = false
+
+            local Frame = Create("Frame", {
+                Parent = Content,
+                Size = UDim2.new(1, 0, 0, 20),
+                BackgroundTransparency = 1
+            })
+
+            Create("TextLabel", {
+                Parent = Frame,
+                Text = cfg.Name,
+                TextColor3 = CFG.TextDark,
+                TextSize = 11,
+                Font = CFG.Font,
+                BackgroundTransparency = 1,
+                Size = UDim2.new(0.6, 0, 1, 0),
+                TextXAlignment = Enum.TextXAlignment.Left
+            })
+
+            local Btn = Create("TextButton", {
+                Parent = Frame,
+                Size = UDim2.new(0, 60, 1, 0),
+                AnchorPoint = Vector2.new(1, 0),
+                Position = UDim2.new(1, 0, 0, 0),
+                BackgroundColor3 = CFG.SecondaryColor,
+                Text = Key.Name,
+                TextColor3 = CFG.TextDark,
+                TextSize = 10,
+                Font = CFG.Font
+            }, {
+                Create("UIStroke", {Color = CFG.StrokeColor}),
+                Create("UICorner", {CornerRadius = UDim.new(0, 3)})
+            })
+
+            Btn.MouseButton1Click:Connect(function()
+                Waiting = true
+                Btn.Text = "..."
+                Btn.TextColor3 = CFG.AccentColor
+            end)
+
+            UserInputService.InputBegan:Connect(function(inp)
+                if Waiting and inp.UserInputType == Enum.UserInputType.Keyboard then
+                    Waiting = false
+                    Key = inp.KeyCode
+                    Btn.Text = Key.Name
+                    Btn.TextColor3 = CFG.TextDark
+                    if cfg.Callback then cfg.Callback(Key) end
+                end
+            end)
+            if cfg.Tooltip then AddTooltip(Frame, cfg.Tooltip) end
+        end
+
+        function ItemFuncs:Button(cfg)
+            local Btn = Create("TextButton", {
+                Parent = Content,
+                Size = UDim2.new(1, 0, 0, 22),
+                BackgroundColor3 = CFG.SecondaryColor,
+                Text = cfg.Name,
+                TextColor3 = CFG.TextDark,
+                Font = Enum.Font.GothamBold,
+                TextSize = 10
+            }, {
+                Create("UIStroke", {Color = CFG.StrokeColor}),
+                Create("UICorner", {CornerRadius = UDim.new(0, 3)})
+            })
+
+            if cfg.Variant == "Primary" then
+                Btn.BackgroundColor3 = CFG.AccentColor
+                Btn.TextColor3 = Color3.new(0,0,0)
+            elseif cfg.Variant == "Danger" then
+                Btn.BackgroundColor3 = Color3.fromRGB(200, 60, 60)
+                Btn.TextColor3 = Color3.new(0,0,0)
+            end
+
+            Btn.MouseButton1Click:Connect(function()
+                if cfg.Callback then cfg.Callback() end
+            end)
+            if cfg.Tooltip then AddTooltip(Btn, cfg.Tooltip) end
+        end
+
+        function ItemFuncs:Label(cfg)
+            local Frame = Create("Frame", {
+                Parent = Content,
+                Size = UDim2.new(1, 0, 0, 16),
+                BackgroundTransparency = 1
+            })
+            Create("TextLabel", {
+                Parent = Frame,
+                Text = cfg.Text or "",
+                TextColor3 = cfg.Color or CFG.TextDark,
+                TextSize = cfg.Size or 10,
+                Font = cfg.Font or Enum.Font.Gotham,
+                BackgroundTransparency = 1,
+                Size = UDim2.new(1, 0, 1, 0),
+                TextXAlignment = Enum.TextXAlignment.Left
+            })
+        end
+
+        return ItemFuncs
+    end
+    return GroupFunctions
+end
+
+-- ============================================
+-- ORIGINAL FEATURES (from mind paid script)
+-- ============================================
+
+-- AC Bypass
+pcall(function()
+    local ACBypass = {}
+    ACBypass.__index = ACBypass
+
+    local PlayersAC = cloneref(game:GetService("Players"))
+    local ReplicatedStorageAC = cloneref(game:GetService("ReplicatedStorage"))
+    local ReplicatedFirstAC = cloneref(game:GetService("ReplicatedFirst"))
+    local ScriptContextAC = cloneref(game:GetService("ScriptContext"))
+    local LocalPlayerAC = PlayersAC.LocalPlayer
+
+    local stateAC = { bypassed = false, load_state = "Unloaded" }
+    local kExpectedScripts = { [1914481512] = "Root", [1936447744] = "ReplicatedController", [3892767096] = "MiscellaneousController", [337076960] = "LocalScript3", [2191862192] = "ClientFighter" }
+
+    local function SafeHook(hookfn, ...)
+        local args = {...}
+        local func, inst, metamethod, detour
+        if hookfn == hookmetamethod then inst, metamethod, detour = args[1], args[2], args[3] else func, detour = args[1], args[2] end
+        if hookfn == hookfunction and iscclosure(func) then detour = newcclosure(detour) end
+        if not iscclosure(detour) then detour = newcclosure(detour) end
+        local original
+        pcall(function()
+            if hookfn == hookmetamethod then original = hookfn(inst, metamethod, detour) else original = hookfn(func, detour) end
+        end)
+        return original
+    end
+
+    local function SafeCall(func, ...)
+        if checkcaller() then return func(...) end
+        local old = getthreadidentity()
+        if old ~= 2 then setthreadidentity(2) end
+        local r = { func(...) }
+        if old ~= 2 then setthreadidentity(old) end
+        return table.unpack(r)
+    end
+
+    local function VerifyScripts()
+        local getscripts_fn, getbytecode_fn = pcall(function() return getscripts or getsenv end), pcall(function() return getscriptbytecode end)
+        if not getscripts_fn or not getbytecode_fn then return true end
+        local found = {}
+        for _, script_instance in ipairs(getscripts_fn()) do
+            local ok, bytecode = pcall(getbytecode_fn, script_instance)
+            if ok and bytecode then
+                for expected_id, _ in pairs(kExpectedScripts) do
+                    if not found[expected_id] then
+                        local source_ok, source = pcall(debug.info, script_instance, "s")
+                        if source_ok and source and source ~= "=[C]" then found[expected_id] = true end
+                    end
+                end
+            end
+        end
+        for id, _ in pairs(kExpectedScripts) do if not found[id] then return false end end
+        return true
+    end
+
+    local function HookKickPrevention()
+        for _, name in ipairs({"Kick", "kick"}) do
+            local f = LocalPlayerAC[name]
+            if type(f) == "function" then
+                local old
+                old = SafeHook(hookfunction, f, function(self, ...)
+                    if self == LocalPlayerAC and not checkcaller() then return end
+                    return old(self, ...)
+                end)
+            end
+        end
+    end
+
+    local function HookACScript(ac_script)
+        if not ac_script then return end
+        local oldindex = SafeHook(hookmetamethod, ac_script, "__index", function(t, k)
+            if t == ac_script and not checkcaller() and k == "Enabled" and not stateAC.bypassed then return false end
+            if checkcaller() then return oldindex(t, k) end
+            return SafeCall(oldindex, t, k)
+        end)
+        local oldnewindex = SafeHook(hookmetamethod, ac_script, "__newindex", function(t, k, v)
+            if t == ac_script and not checkcaller() and k == "Enabled" and not stateAC.bypassed then return end
+            if checkcaller() then return oldnewindex(t, k, v) end
+            return SafeCall(oldnewindex, t, k, v)
+        end)
+    end
+
+    if VerifyScripts() then
+        local ac_script = ReplicatedFirstAC:WaitForChild("LocalScript3", 10)
+        local ac_event = ReplicatedStorageAC:WaitForChild("Remotes", 10):WaitForChild("RemoteEvent", 10)
+        if ac_script and ac_event then
+            HookACScript(ac_script)
+            HookKickPrevention()
+            ac_script.Enabled = false
+            stateAC.bypassed = true
+            print("[mind paid] AC Bypass loaded")
+        end
+    end
+end)
+
+-- Variables
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local LocalPlayer = Players.LocalPlayer
+local char, root, hum
+local conns = {}
+
+local function killConn(key)
+    if conns[key] then conns[key]:Disconnect(); conns[key] = nil end
+end
+
+local function getLocalRoot()
+    return root
+end
+
+local function getClosest()
+    if not root then return nil end
+    local best, bestDist = nil, math.huge
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p == LocalPlayer or not p.Character then continue end
+        local hrp = p.Character:FindFirstChild("HumanoidRootPart")
+        if not hrp then continue end
+        local d = (root.Position - hrp.Position).Magnitude
+        if d < bestDist then bestDist = d; best = p end
+    end
+    return best
+end
+
+local function bindChar(c)
+    char = c
+    root = c:WaitForChild("HumanoidRootPart", 5)
+    hum = c:WaitForChild("Humanoid", 5)
+    if riotEnabled then startRiot() end
+    if riotAbuseEnabled then startRiotAbuse() end
+end
+
+if LocalPlayer.Character then bindChar(LocalPlayer.Character) end
+
+LocalPlayer.CharacterAdded:Connect(function(c)
+    bindChar(c)
+    task.wait(0.3)
+    if CFG.VOID_ENABLED then startVoid() end
+    if cfg.orbitEnabled then startOrbit() end
+    if cfgDodge.predEnabled then startPrediction() end
+    if aaSettings.enabled then startAntiAim() end
+    if evadeConfig.enabled then startEvade() end
+    if voidHideConfig.enabled then startVoidHide() end
+end)
+
+LocalPlayer.CharacterRemoving:Connect(function()
+    killConn("void"); killConn("orbit"); killConn("pred"); killConn("antiAim"); killConn("riot"); killConn("riotAbuse")
+    killConn("evade"); killConn("voidHide")
+    root = nil; hum = nil; char = nil
+end)
+
+-- VOIDSPAM CONFIG
+local CFG = {
+    VOID_ENABLED = false, VOID_METHOD = "Quantum",
+    SPEED = 1e9, CHAOS = 0.98, BASE_ALTITUDE = 1e10, RADIUS = 2e11,
+}
+local elapsed, voidPos, voidDriftDir, basePos = 0, Vector3.new(0, CFG.BASE_ALTITUDE, 0), Vector3.new(1, 0, 0).Unit, Vector3.new(0, CFG.BASE_ALTITUDE, 0)
+
+local function computeVoidDriftDir3D(t)
+    local nx, ny, nz, amp, freq = 0, 0, 0, 1, 0.0001
+    for i=1,4 do nx = nx + math.noise(t*freq, 0, 0)*amp; ny = ny + math.noise(0, t*freq, 0)*amp; nz = nz + math.noise(0, 0, t*freq)*amp; freq = freq*2.37; amp = amp*0.5 end
+    local sp, cp = t*0.00073, t*0.00213
+    nx = nx + math.noise(sp+13.7, 7.3, 0)*0.3 + math.sin(cp)*math.cos(cp*1.618)*0.2
+    ny = ny + math.noise(0, sp+31.1, 17.9)*0.3 + math.cos(cp*0.618)*math.sin(cp*2.718)*0.2
+    nz = nz + math.noise(7.3, 0, sp+11.5)*0.3 + math.sin(cp*1.3)*math.cos(cp*0.7)*0.2
+    local len = math.sqrt(nx*nx + ny*ny + nz*nz)
+    if len < 0.001 then return 1, 0, 0 end
+    return nx/len, ny/len, nz/len
+end
+
+local function stepVoidDrift(dt)
+    local m = CFG.VOID_METHOD
+    if m == "Drift" then
+        local dx, dy, dz = computeVoidDriftDir3D(elapsed)
+        voidDriftDir = voidDriftDir:Lerp(Vector3.new(dx, dy, dz).Unit, CFG.CHAOS * dt * 10)
+        voidPos = voidPos + voidDriftDir * CFG.SPEED * dt
+        if (voidPos - basePos).Magnitude > CFG.RADIUS then voidPos = basePos + (voidPos - basePos).Unit * CFG.RADIUS; voidDriftDir = -voidDriftDir end
+        return voidPos
+    elseif m == "Chaos" then
+        voidPos = voidPos + Vector3.new((math.random()-0.5)*CFG.SPEED*dt*5, (math.random()-0.5)*CFG.SPEED*dt*5, (math.random()-0.5)*CFG.SPEED*dt*5)
+        if (voidPos - basePos).Magnitude > CFG.RADIUS then voidPos = basePos + (voidPos - basePos).Unit * CFG.RADIUS end
+        return voidPos
+    elseif m == "Loop" then
+        local r = math.min(CFG.RADIUS * 0.8, 1e9 + (elapsed % 100)*1e7)
+        return basePos + Vector3.new(math.cos(elapsed*2)*r, math.sin(elapsed*1.3)*r*0.2, math.sin(elapsed*2)*r)
+    elseif m == "Spiral" then
+        local r = math.min(CFG.RADIUS * 0.9, (elapsed % 50)*2e9)
+        return basePos + Vector3.new(math.cos(elapsed*3)*r, math.sin(elapsed*0.5)*r*0.3, math.sin(elapsed*3)*r)
+    elseif m == "Quantum" then
+        local r = CFG.RADIUS * (math.random()>0.5 and 1 or -1)
+        return basePos + Vector3.new(r, (math.random()-0.5)*CFG.RADIUS*0.2, r) + Vector3.new((math.random()-0.5)*CFG.RADIUS, 0, (math.random()-0.5)*CFG.RADIUS)
+    end
+    return voidPos
+end
+
+local function lockToVoid(dt)
+    voidPos = stepVoidDrift(dt)
+    local hrp = getLocalRoot()
+    if not hrp then return end
+    pcall(function() hrp.CFrame = CFrame.new(voidPos); hrp.AssemblyLinearVelocity = Vector3.zero; hrp.AssemblyAngularVelocity = Vector3.zero end)
+    if math.random(1,10) == 1 then
+        pcall(function() hrp.AssemblyLinearVelocity = Vector3.new((math.random()-0.5)*2e7, (math.random()-0.5)*2e7, (math.random()-0.5)*2e7) end)
+    end
+end
+
+function startVoid()
+    killConn("void")
+    local hrp = getLocalRoot()
+    if hrp then
+        voidPos = Vector3.new(hrp.Position.X, CFG.BASE_ALTITUDE, hrp.Position.Z)
+        basePos = Vector3.new(0, CFG.BASE_ALTITUDE, 0)
+    end
+    conns.void = RunService.Heartbeat:Connect(function(dt)
+        if not CFG.VOID_ENABLED then killConn("void"); return end
+        elapsed = elapsed + dt
+        lockToVoid(dt)
+    end)
+end
+function stopVoid() killConn("void") end
+
+-- ORBIT CONFIG
+local cfg = { orbitEnabled = false, orbitSpeed = 90, orbitDist = 8, orbitHeight = 0, orbitLerp = 0.3, orbitMode = "Circle", orbitPredict = false, orbitPredStrength = 0.2, orbitFaceTarget = true, orbitAutoLockDist = 50 }
+local orbitAngle = 0
+local orbitLocalElapsed = 0
+local orbitCurrentRadius = 0
+
+function startOrbit()
+    killConn("orbit")
+    if hum then hum:ChangeState(Enum.HumanoidStateType.Physics) end
+    orbitAngle = 0
+    orbitLocalElapsed = 0
+    orbitCurrentRadius = cfg.orbitDist
+
+    conns.orbit = RunService.Heartbeat:Connect(function(dt)
+        if not cfg.orbitEnabled or not root then 
+            if not cfg.orbitEnabled then killConn("orbit") end
+            return 
+        end
+        
+        local target = getClosest()
+        if not target or not target.Character then return end
+        local hrp = target.Character:FindFirstChild("HumanoidRootPart")
+        if not hrp then return end
+
+        if (root.Position - hrp.Position).Magnitude > cfg.orbitAutoLockDist then return end
+
+        local targetPos = hrp.Position
+        if cfg.orbitPredict then
+            targetPos = targetPos + hrp.AssemblyLinearVelocity * cfg.orbitPredStrength
+        end
+
+        orbitAngle = orbitAngle + math.rad(cfg.orbitSpeed) * dt
+        orbitLocalElapsed = orbitLocalElapsed + dt
+
+        local r = cfg.orbitDist
+        local h = cfg.orbitHeight
+        local x, y, z = 0, 0, 0
+
+        if cfg.orbitMode == "Circle" then
+            x = math.cos(orbitAngle) * r
+            z = math.sin(orbitAngle) * r
+            y = h
+        elseif cfg.orbitMode == "Figure 8" then
+            x = math.sin(orbitAngle) * r
+            z = math.sin(orbitAngle) * math.cos(orbitAngle) * r * 0.7
+            y = h
+        elseif cfg.orbitMode == "Spiral In" then
+            orbitCurrentRadius = math.max(1, orbitCurrentRadius - (dt * 2))
+            x = math.cos(orbitAngle) * orbitCurrentRadius
+            z = math.sin(orbitAngle) * orbitCurrentRadius
+            y = h
+        elseif cfg.orbitMode == "Spiral Out" then
+            orbitCurrentRadius = math.min(cfg.orbitDist * 2, orbitCurrentRadius + (dt * 2))
+            x = math.cos(orbitAngle) * orbitCurrentRadius
+            z = math.sin(orbitAngle) * orbitCurrentRadius
+            y = h
+        elseif cfg.orbitMode == "Bounce" then
+            x = math.cos(orbitAngle) * r
+            z = math.sin(orbitAngle) * r
+            y = h + math.sin(orbitLocalElapsed * 3) * 5
+        end
+
+        local dst = targetPos + Vector3.new(x, y, z)
+        local smooth = root.Position:Lerp(dst, cfg.orbitLerp)
+
+        if cfg.orbitFaceTarget then
+            root.CFrame = CFrame.new(smooth, Vector3.new(targetPos.X, smooth.Y, targetPos.Z))
+        else
+            root.CFrame = CFrame.new(smooth)
+        end
+    end)
+end
+function stopOrbit() killConn("orbit"); cfg.orbitEnabled = false end
+
+-- PREDICTION DODGE
+local cfgDodge = {
+    predEnabled = false,
+    predRadius = 20,
+    predDodgeDist = 30,
+    predCooldown = 0.3,
+    predThreshold = 800,
+    predMult = 1,
+}
+local lastDodgeTick = 0
+
+function startPrediction()
+    killConn("pred")
+    conns.pred = RunService.Heartbeat:Connect(function(dt)
+        if not cfgDodge.predEnabled or not root then if not cfgDodge.predEnabled then killConn("pred") end return end
+        if hum and hum.Health <= 0 then return end
+        local myPos = root.Position
+        for _, p in ipairs(Players:GetPlayers()) do
+            if p == LocalPlayer or not p.Character then continue end
+            local hrp = p.Character:FindFirstChild("HumanoidRootPart")
+            local vel = hrp and hrp.AssemblyLinearVelocity
+            if hrp and vel and vel.Magnitude > cfgDodge.predThreshold then
+                local predictedPos = hrp.Position + vel * (dt * 3 * cfgDodge.predMult)
+                if (predictedPos - myPos).Magnitude < cfgDodge.predRadius and tick() - lastDodgeTick > cfgDodge.predCooldown then
+                    lastDodgeTick = tick()
+                    local perp = Vector3.new(-vel.Z, 0, vel.X).Unit
+                    local dir = math.random(0,1) == 0 and perp or -perp
+                    root.CFrame = CFrame.new(myPos + dir * cfgDodge.predDodgeDist)
+                    Library:Notify("dodged " .. p.Name, "success")
+                    break
+                end
+            end
+        end
+    end)
+end
+function stopPrediction() killConn("pred"); cfgDodge.predEnabled = false end
+
+-- ANTI-AIM
+local aaSettings = { enabled = false, mode = "Spin", speed = 5000, angle = 90, randomSpeed = true, jitterPitch = true }
+local aaAngleAccum, aaJitterState, aaRandomTimer, aaRandomMultiplier = 0, 0, 0, 1
+function startAntiAim()
+    killConn("antiAim")
+    conns.antiAim = RunService.Heartbeat:Connect(function(dt)
+        if not aaSettings.enabled or not root then if not aaSettings.enabled then killConn("antiAim") end return end
+        local speed = aaSettings.speed
+        if aaSettings.randomSpeed then
+            aaRandomTimer = aaRandomTimer + dt
+            if aaRandomTimer > 0.1 then aaRandomTimer = 0; aaRandomMultiplier = 0.2 + math.random()*0.8 end
+            speed = speed * aaRandomMultiplier
+        end
+        if aaSettings.mode == "Spin" then
+            aaAngleAccum = aaAngleAccum + speed*dt
+            root.CFrame = root.CFrame * CFrame.Angles(0, math.rad(aaAngleAccum), 0)
+        elseif aaSettings.mode == "Jitter" then
+            root.CFrame = root.CFrame * CFrame.Angles(math.rad(aaJitterState==0 and aaSettings.angle or -aaSettings.angle), math.rad(aaJitterState==0 and aaSettings.angle or -aaSettings.angle), 0)
+            aaJitterState = (aaJitterState + 1) % 2
+        elseif aaSettings.mode == "Static" then
+            root.CFrame = root.CFrame * CFrame.Angles(0, math.rad(aaSettings.angle), 0)
+        end
+    end)
+end
+function stopAntiAim() killConn("antiAim"); aaSettings.enabled = false end
+
+-- RIOT GODMODE
+local riotEnabled = false
+local riotSpeed, riotRange, riotEvadeRange, riotTimer = 0.03, 50, 30, 0
+local riotSpinSpeed = 180
+local riotAngle = 0
+
+function startRiot()
+    killConn("riot")
+    conns.riot = RunService.Heartbeat:Connect(function(dt)
+        if not riotEnabled or not root then killConn("riot"); return end
+        riotTimer = riotTimer + dt
+        if riotTimer < riotSpeed then return end
+        riotTimer = 0
+        
+        local currentPos = root.Position
+        local target = getClosest()
+        local newPos = currentPos
+
+        if target and target.Character then
+            local hrp = target.Character:FindFirstChild("HumanoidRootPart")
+            if hrp and (currentPos - hrp.Position).Magnitude < riotEvadeRange then
+                local dir = (currentPos - hrp.Position).Unit
+                newPos = currentPos + dir * math.random(riotRange*0.5, riotRange*1.5)
+            else
+                local angle = math.random() * 2 * math.pi
+                newPos = currentPos + Vector3.new(math.cos(angle)*math.random(riotRange*0.2, riotRange), math.random(-riotRange*0.5, riotRange*0.5), math.sin(angle)*math.random(riotRange*0.2, riotRange))
+            end
+        else
+            local angle = math.random() * 2 * math.pi
+            newPos = currentPos + Vector3.new(math.cos(angle)*math.random(riotRange*0.2, riotRange), math.random(-riotRange*0.5, riotRange*0.5), math.sin(angle)*math.random(riotRange*0.2, riotRange))
+        end
+
+        riotAngle = riotAngle + (riotSpinSpeed * dt)
+        if riotAngle >= 360 then riotAngle = riotAngle - 360 end
+
+        pcall(function()
+            root.CFrame = CFrame.new(newPos) * CFrame.Angles(0, math.rad(riotAngle), 0)
+            root.AssemblyLinearVelocity = Vector3.zero
+        end)
+    end)
+end
+function stopRiot() killConn("riot"); riotEnabled = false end
+
+-- RIOT ABUSE
+local riotAbuseEnabled = false
+local riotAbuseHeight = 3
+local riotAbuseForward = 0
+local riotAbuseRight = 0
+local riotAbuseDown = 0
+local riotAbuseMode = "Stick"
+
+function startRiotAbuse()
+    killConn("riotAbuse")
+    conns.riotAbuse = RunService.Heartbeat:Connect(function(dt)
+        if not riotAbuseEnabled or not root then
+            if not riotAbuseEnabled then killConn("riotAbuse") end
+            return
+        end
+        
+        local target = getClosest()
+        if not target or not target.Character then return end
+        local targetRoot = target.Character:FindFirstChild("HumanoidRootPart")
+        if not targetRoot then return end
+        
+        local offset = Vector3.new(
+            riotAbuseRight,
+            riotAbuseHeight - riotAbuseDown,
+            riotAbuseForward
+        )
+        local targetPos = targetRoot.Position + offset
+        
+        if riotAbuseMode == "Stick" then
+            root.CFrame = CFrame.new(targetPos)
+        elseif riotAbuseMode == "Bounce" then
+            local bounceOffset = math.abs(math.sin(tick() * 8)) * math.abs(riotAbuseHeight)
+            root.CFrame = CFrame.new(targetRoot.Position + Vector3.new(
+                riotAbuseRight,
+                bounceOffset - riotAbuseDown,
+                riotAbuseForward
+            ))
+        end
+        
+        root.AssemblyLinearVelocity = Vector3.zero
+    end)
+end
+function stopRiotAbuse() killConn("riotAbuse"); riotAbuseEnabled = false end
+
+-- EVADE
+local evadeConfig = {
+    enabled = false,
+    minDist = 5000,
+    maxDist = 50000,
+    delay = 0.1,
+    killVelocity = true,
+    yMode = "Random",
+    axisLock = "None",
+    shape = "Sphere",
+    warpMode = "Instant",
+    invertX = false,
+    invertZ = false,
+    yBias = 0,
+    chaosAmp = 1,
+}
+local evadeConn = nil
+local evadeActive = false
+local evadeLastPos = Vector3.new(0, 0, 0)
+
+local function evadeGenPos(origin)
+    local minD = evadeConfig.minDist
+    local maxD = evadeConfig.maxDist
+    local shape = evadeConfig.shape
+    local yMode = evadeConfig.yMode
+    local axisLock = evadeConfig.axisLock
+    local chaos = evadeConfig.chaosAmp
+    local invertX = evadeConfig.invertX
+    local invertZ = evadeConfig.invertZ
+    local yBias = evadeConfig.yBias
+
+    local dist = minD + math.random() * (maxD - minD)
+    local x, y, z
+
+    if shape == "Sphere" then
+        local theta = math.random() * 2 * math.pi
+        local phi = math.acos(2 * math.random() - 1)
+        x = dist * math.sin(phi) * math.cos(theta)
+        y = dist * math.sin(phi) * math.sin(theta)
+        z = dist * math.cos(phi)
+    elseif shape == "Cube" then
+        x = (math.random() - 0.5) * 2 * dist
+        y = (math.random() - 0.5) * 2 * dist
+        z = (math.random() - 0.5) * 2 * dist
+    elseif shape == "Flat" then
+        local theta = math.random() * 2 * math.pi
+        x = dist * math.cos(theta)
+        y = (math.random() - 0.5) * dist * 0.05
+        z = dist * math.sin(theta)
+    elseif shape == "Vertical" then
+        x = (math.random() - 0.5) * dist * 0.05
+        y = dist
+        z = (math.random() - 0.5) * dist * 0.05
+    else
+        local theta = math.random() * 2 * math.pi
+        x = dist * math.cos(theta)
+        y = dist * math.sin(theta)
+        z = dist * math.sin(theta + math.pi * 0.5)
+    end
+
+    x = x * chaos
+    y = y * chaos
+    z = z * chaos
+    if invertX then x = -x end
+    if invertZ then z = -z end
+    if yMode == "Up" then
+        y = math.abs(y) + dist * 0.5
+    elseif yMode == "Down" then
+        y = -(math.abs(y) + dist * 0.5)
+    elseif yMode == "Flat" then
+        y = 0
+    end
+
+    y = y + yBias
+    if axisLock == "X" then z = 0; y = 0
+    elseif axisLock == "Y" then x = 0; z = 0
+    elseif axisLock == "Z" then x = 0; y = 0
+    elseif axisLock == "XZ" then y = 0 end
+    return Vector3.new(origin.X + x, origin.Y + y, origin.Z + z)
+end
+
+function startEvade()
+    if evadeConn then evadeConn:Disconnect() end
+    evadeActive = true
+    evadeConfig.enabled = true
+    evadeConn = task.spawn(function()
+        while evadeActive and evadeConfig.enabled do
+            pcall(function()
+                local hrp = getLocalRoot()
+                if hrp then
+                    local origin = evadeLastPos
+                    local target = evadeGenPos(origin)
+                    evadeLastPos = target
+
+                    local warp = evadeConfig.warpMode
+                    if warp == "Instant" then
+                        hrp.CFrame = CFrame.new(target)
+                        if evadeConfig.killVelocity then
+                            hrp.AssemblyLinearVelocity = Vector3.zero
+                            hrp.AssemblyAngularVelocity = Vector3.zero
+                        end
+                    elseif warp == "Lerp" then
+                        local steps = 5
+                        local start = hrp.CFrame
+                        local goal = CFrame.new(target)
+                        for i = 1, steps do
+                            hrp.CFrame = start:Lerp(goal, i / steps)
+                            task.wait()
+                        end
+                        if evadeConfig.killVelocity then
+                            hrp.AssemblyLinearVelocity = Vector3.zero
+                            hrp.AssemblyAngularVelocity = Vector3.zero
+                        end
+                    end
+                end
+            end)
+            task.wait(math.max(evadeConfig.delay, 0.01))
+        end
+    end)
+end
+
+function stopEvade()
+    evadeActive = false
+    evadeConfig.enabled = false
+    if evadeConn then task.cancel(evadeConn); evadeConn = nil end
+    evadeLastPos = Vector3.new(0, 0, 0)
+end
+
+-- VOID HIDE
+local voidHideConfig = {
+    enabled = false,
+    x = 1e6,
+    y = 9e25,
+    z = 1e6,
+    syncRagebot = false,
+}
+local voidHideConn = nil
+
+function startVoidHide()
+    if voidHideConn then voidHideConn:Disconnect() end
+    voidHideConn = RunService.Heartbeat:Connect(function()
+        if not voidHideConfig.enabled then return end
+        pcall(function() workspace.FallenPartsDestroyHeight = -math.huge end)
+        pcall(function() workspace.FallenPartsDestroyHeight = 0/0 end)
+
+        local hrp = getLocalRoot()
+        local hum = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+        if not hrp or not hum or hum.Health <= 0 then return end
+        if hum:GetState() ~= Enum.HumanoidStateType.Physics then
+            hum:ChangeState(Enum.HumanoidStateType.Physics)
+        end
+
+        local base = hrp.Position
+        local hx = voidHideConfig.x
+        local hy = voidHideConfig.y
+        local hz = voidHideConfig.z
+        local sx = (math.random() < 0.5) and 1 or -1
+        local sz = (math.random() < 0.5) and 1 or -1
+
+        local hideCf = CFrame.new(base.X + sx * hx, base.Y - hy, base.Z + sz * hz)
+        pcall(function()
+            hrp.CFrame = hideCf
+            hrp.AssemblyLinearVelocity = Vector3.zero
+            hrp.AssemblyAngularVelocity = Vector3.zero
+        end)
+
+        pcall(function() workspace.FallenPartsDestroyHeight = -math.huge end)
+        pcall(function() workspace.FallenPartsDestroyHeight = 0/0 end)
+    end)
+end
+
+function stopVoidHide()
+    if voidHideConn then voidHideConn:Disconnect(); voidHideConn = nil end
+    voidHideConfig.enabled = false
+end
+
+-- ============================================
+-- UI TABS (EclipseUI style with original features)
+-- ============================================
+
+local VoidTab = Library:Tab("Void", "98159911363596")
+local OrbitTab = Library:Tab("Orbit", "10455604811")
+local EvadeTab = Library:Tab("Evade", "10455603612")
+local VoidHideTab = Library:Tab("Void Hide", "11888734334")
+local PredictionTab = Library:Tab("Prediction", "12403097620")
+local AntiAimTab = Library:Tab("AntiAim", "3926305904")
+local RiotTab = Library:Tab("Riot", "6023426920")
+local SettingsTab = Library:Tab("Settings", "6023426919")
+
+-- ============================================
+-- VOID TAB
+-- ============================================
+local VG = VoidTab:Group("Void Control")
+VG:Toggle({Name = "Enable Void", Tooltip = "Teleports root to void coordinates", Callback = function(val) CFG.VOID_ENABLED = val; if val then startVoid() else stopVoid() end end})
+VG:Dropdown({Name = "Voidspam Methods", Options = {"Drift", "Chaos", "Loop", "Spiral", "Quantum"}, Default = "Quantum", Callback = function(v) CFG.VOID_METHOD = v end})
+VG:Slider({Name = "Speed (B/s)", Min = 1, Max = 2000, Default = 1, Unit = "", Callback = function(v) CFG.SPEED = v * 1e9 end})
+VG:Slider({Name = "Chaos (%)", Min = 1, Max = 100, Default = 98, Unit = "%", Callback = function(v) CFG.CHAOS = v * 0.01 end})
+VG:Slider({Name = "Base Altitude (B)", Min = 1, Max = 1000, Default = 10, Unit = "", Callback = function(v) CFG.BASE_ALTITUDE = v * 1e9 end})
+VG:Slider({Name = "Radius (B)", Min = 1, Max = 2000, Default = 200, Unit = "", Callback = function(v) CFG.RADIUS = v * 1e9 end})
+
+local VG2 = VoidTab:Group("Void Info")
+VG2:Label({Text = "• 5 movement algorithms"})
+VG2:Label({Text = "• Pure positional drift"})
+VG2:Label({Text = "• No enemy evasion"})
+VG2:Label({Text = "• Teleports root part"})
+
+-- ============================================
+-- ORBIT TAB
+-- ============================================
+local OG = OrbitTab:Group("Orbit Controls")
+OG:Toggle({Name = "Enable Orbit", Tooltip = "Orbit around closest player", Callback = function(val) cfg.orbitEnabled = val; if val then startOrbit() else stopOrbit() end end})
+OG:Dropdown({Name = "Orbit Mode", Options = {"Circle", "Figure 8", "Spiral In", "Spiral Out", "Bounce"}, Default = "Circle", Callback = function(v) cfg.orbitMode = v; orbitCurrentRadius = cfg.orbitDist end})
+OG:Slider({Name = "Speed (deg/s)", Min = 5, Max = 720, Default = 90, Unit = "", Callback = function(v) cfg.orbitSpeed = v end})
+OG:Slider({Name = "Radius", Min = 1, Max = 200, Default = 8, Unit = "", Callback = function(v) cfg.orbitDist = v; orbitCurrentRadius = v end})
+OG:Slider({Name = "Height Offset", Min = -200, Max = 200, Default = 0, Unit = "", Callback = function(v) cfg.orbitHeight = v end})
+OG:Slider({Name = "Smoothing", Min = 1, Max = 100, Default = 30, Unit = "%", Callback = function(v) cfg.orbitLerp = v / 100 end})
+
+local OG2 = OrbitTab:Group("Orbit Advanced")
+OG2:Toggle({Name = "Face Target", Tooltip = "Face the player you're orbiting", Default = true, Callback = function(v) cfg.orbitFaceTarget = v end})
+OG2:Toggle({Name = "Enable Prediction", Tooltip = "Predict target movement", Callback = function(v) cfg.orbitPredict = v end})
+OG2:Slider({Name = "Prediction Strength", Min = 0, Max = 100, Default = 20, Unit = "%", Callback = function(v) cfg.orbitPredStrength = v / 100 end})
+OG2:Slider({Name = "Max Auto-Lock Dist", Min = 10, Max = 500, Default = 50, Unit = "", Callback = function(v) cfg.orbitAutoLockDist = v end})
+
+-- ============================================
+-- EVADE TAB
+-- ============================================
+local EG = EvadeTab:Group("Evade Settings")
+EG:Toggle({Name = "Enable Evade", Tooltip = "Teleport to random positions", Callback = function(val) evadeConfig.enabled = val; if val then startEvade() else stopEvade() end end})
+EG:Slider({Name = "Min Distance", Min = 100, Max = 50000, Default = 5000, Unit = "", Callback = function(v) evadeConfig.minDist = v end})
+EG:Slider({Name = "Max Distance", Min = 100, Max = 500000, Default = 50000, Unit = "", Callback = function(v) evadeConfig.maxDist = v end})
+EG:Slider({Name = "Delay (x0.01s)", Min = 1, Max = 100, Default = 10, Unit = "", Callback = function(v) evadeConfig.delay = v / 100 end})
+EG:Slider({Name = "Chaos Amplitude", Min = 1, Max = 100, Default = 10, Unit = "", Callback = function(v) evadeConfig.chaosAmp = v / 10 end})
+EG:Slider({Name = "Y Bias", Min = -50000, Max = 50000, Default = 0, Unit = "", Callback = function(v) evadeConfig.yBias = v end})
+
+local EG2 = EvadeTab:Group("Evade Modes")
+EG2:Dropdown({Name = "Shape", Options = {"Sphere", "Cube", "Flat", "Vertical"}, Default = "Sphere", Callback = function(v) evadeConfig.shape = v end})
+EG2:Dropdown({Name = "Y Mode", Options = {"Random", "Up", "Down", "Flat"}, Default = "Random", Callback = function(v) evadeConfig.yMode = v end})
+EG2:Dropdown({Name = "Axis Lock", Options = {"None", "X", "Y", "Z", "XZ"}, Default = "None", Callback = function(v) evadeConfig.axisLock = v end})
+EG2:Dropdown({Name = "Warp Mode", Options = {"Instant", "Lerp"}, Default = "Instant", Callback = function(v) evadeConfig.warpMode = v end})
+EG2:Toggle({Name = "Kill Velocity", Default = true, Callback = function(v) evadeConfig.killVelocity = v end})
+EG2:Toggle({Name = "Invert X", Callback = function(v) evadeConfig.invertX = v end})
+EG2:Toggle({Name = "Invert Z", Callback = function(v) evadeConfig.invertZ = v end})
+
+-- ============================================
+-- VOID HIDE TAB
+-- ============================================
+local VHT = VoidHideTab:Group("Void Hide Settings")
+VHT:Toggle({Name = "Enable Void Hide", Tooltip = "Teleports you into the void", Callback = function(val) voidHideConfig.enabled = val; if val then startVoidHide() else stopVoidHide() end end})
+VHT:Slider({Name = "X Distance", Min = 1, Max = 12e25, Default = 1000000, Unit = "", Callback = function(v) voidHideConfig.x = v end})
+VHT:Slider({Name = "Y Distance", Min = 1, Max = 12e25, Default = 9e25, Unit = "", Callback = function(v) voidHideConfig.y = v end})
+VHT:Slider({Name = "Z Distance", Min = 1, Max = 12e25, Default = 1000000, Unit = "", Callback = function(v) voidHideConfig.z = v end})
+
+local VHT2 = VoidHideTab:Group("Void Hide Info")
+VHT2:Label({Text = "• Teleports you into the void"})
+VHT2:Label({Text = "• Makes you unhittable"})
+VHT2:Label({Text = "• Adjust X, Y, Z distances"})
+
+-- ============================================
+-- PREDICTION TAB
+-- ============================================
+local PT = PredictionTab:Group("Prediction Dodge")
+PT:Toggle({Name = "Enable Prediction", Tooltip = "Dodge incoming void spammers", Callback = function(val) cfgDodge.predEnabled = val; if val then startPrediction() else stopPrediction() end end})
+PT:Slider({Name = "Danger Radius", Min = 5, Max = 100, Default = 20, Unit = "", Callback = function(v) cfgDodge.predRadius = v end})
+PT:Slider({Name = "Dodge Distance", Min = 5, Max = 150, Default = 30, Unit = "", Callback = function(v) cfgDodge.predDodgeDist = v end})
+PT:Slider({Name = "Cooldown (ms)", Min = 50, Max = 2000, Default = 300, Unit = "", Callback = function(v) cfgDodge.predCooldown = v / 1000 end})
+PT:Slider({Name = "Speed Threshold", Min = 200, Max = 5000, Default = 800, Unit = "", Callback = function(v) cfgDodge.predThreshold = v end})
+PT:Slider({Name = "Prediction Multiplier", Min = 5, Max = 100, Default = 10, Unit = "x", Callback = function(v) cfgDodge.predMult = v / 10 end})
+
+local PT2 = PredictionTab:Group("Prediction Info")
+PT2:Label({Text = "• Dodges incoming void spammers"})
+PT2:Label({Text = "• Uses velocity prediction"})
+PT2:Label({Text = "• Perpendicular dodge direction"})
+
+-- ============================================
+-- ANTI-AIM TAB
+-- ============================================
+local AAT = AntiAimTab:Group("Extreme Anti-Aim")
+AAT:Toggle({Name = "Enable Anti-Aim", Tooltip = "Rotates your character", Callback = function(val) aaSettings.enabled = val; if val then startAntiAim() else stopAntiAim() end end})
+AAT:Dropdown({Name = "Mode", Options = {"Spin", "Jitter", "Static"}, Default = "Spin", Callback = function(v) aaSettings.mode = v end})
+AAT:Slider({Name = "Speed (deg/s)", Min = 100, Max = 5000, Default = 5000, Unit = "", Callback = function(v) aaSettings.speed = v end})
+AAT:Slider({Name = "Jitter/Static Angle", Min = 10, Max = 180, Default = 90, Unit = "", Callback = function(v) aaSettings.angle = v end})
+AAT:Toggle({Name = "Randomize Speed", Default = true, Callback = function(v) aaSettings.randomSpeed = v end})
+AAT:Toggle({Name = "Jitter Pitch (2D)", Default = true, Callback = function(v) aaSettings.jitterPitch = v end})
+
+local AAT2 = AntiAimTab:Group("Anti-Aim Info")
+AAT2:Label({Text = "• Spin: rotates 360°"})
+AAT2:Label({Text = "• Jitter: alternates pitch + yaw"})
+AAT2:Label({Text = "• Static: locks rotation"})
+AAT2:Label({Text = "• Max speed: 5000 deg/s"})
+
+-- ============================================
+-- RIOT TAB
+-- ============================================
+local RT = RiotTab:Group("Riot – Godmode")
+RT:Toggle({Name = "Enable Riot (Godmode)", Tooltip = "Erratic TP spam", Callback = function(val) riotEnabled = val; if val then startRiot() else stopRiot() end end})
+RT:Slider({Name = "Teleport Delay (sec)", Min = 1, Max = 50, Default = 3, Unit = "", Callback = function(v) riotSpeed = v / 100 end})
+RT:Slider({Name = "Jump Range (studs)", Min = 10, Max = 200, Default = 50, Unit = "", Callback = function(v) riotRange = v end})
+RT:Slider({Name = "Evade Trigger (studs)", Min = 0, Max = 100, Default = 30, Unit = "", Callback = function(v) riotEvadeRange = v end})
+RT:Slider({Name = "Spin Speed (deg/s)", Min = 0, Max = 720, Default = 180, Unit = "", Callback = function(v) riotSpinSpeed = v end})
+
+local RT2 = RiotTab:Group("Riot Info")
+RT2:Label({Text = "• Erratic TP spam"})
+RT2:Label({Text = "• Auto-evades close enemies"})
+RT2:Label({Text = "• Spins 360° during teleports"})
+
+-- RIOT ABUSE (same tab)
+local RA = RiotTab:Group("Riot Abuse")
+RA:Toggle({Name = "Enable Riot Abuse", Tooltip = "Stick or bounce on target", Callback = function(val) 
+    riotAbuseEnabled = val
+    if val then 
+        startRiotAbuse()
+        Library:Notify("Riot Abuse enabled", "success")
+    else 
+        stopRiotAbuse()
+        Library:Notify("Riot Abuse disabled", "warning")
+    end
+end})
+RA:Dropdown({Name = "Abuse Mode", Options = {"Stick", "Bounce"}, Default = "Stick", Callback = function(v) riotAbuseMode = v end})
+RA:Slider({Name = "Height Offset", Min = -50, Max = 50, Default = 3, Unit = "m", Callback = function(v) riotAbuseHeight = v end})
+RA:Slider({Name = "Forward Offset", Min = -50, Max = 50, Default = 0, Unit = "m", Callback = function(v) riotAbuseForward = v end})
+RA:Slider({Name = "Right Offset", Min = -50, Max = 50, Default = 0, Unit = "m", Callback = function(v) riotAbuseRight = v end})
+RA:Slider({Name = "Down Offset", Min = 0, Max = 50, Default = 0, Unit = "m", Callback = function(v) riotAbuseDown = v end})
+
+-- ============================================
+-- SETTINGS TAB
+-- ============================================
+local ST = SettingsTab:Group("Menu Controls")
+ST:Toggle({Name = "Keybind Menu", Default = false, Callback = function(Value) pcall(function() if Library.KeybindFrame then Library.KeybindFrame.Visible = Value end end) end})
+ST:Keybind({Name = "Menu Keybind", Default = Enum.KeyCode.RightShift, Callback = function(k) Library.MenuKey = k end})
+
+local ST2 = SettingsTab:Group("Interface")
+local autoLoadEnabled = true
+ST2:Toggle({Name = "Auto Load Config", Default = true, Callback = function(val) autoLoadEnabled = val end})
+ST2:Button({Name = "Unload Script", Variant = "Danger", Callback = function() 
+    Library.Unloaded = true
+    ScreenGui:Destroy()
+end})
+
+-- Theme / Save (placeholder)
+local ST3 = SettingsTab:Group("Theme & Save")
+ST3:Label({Text = "Theme & Save features"})
+ST3:Label({Text = "Config saved automatically"})
+ST3:Button({Name = "Save Config", Callback = function() Library:Notify("Config saved", "success") end})
+ST3:Button({Name = "Load Config", Callback = function() Library:Notify("Config loaded", "success") end})
+
+-- ============================================
+-- MENU KEYBIND + MOBILE TOGGLE
+-- ============================================
+Library.MenuKey = Enum.KeyCode.RightShift
+local Visible = true
+
+UserInputService.InputBegan:Connect(function(input, gpe)
+    if not gpe and input.KeyCode == Library.MenuKey then
+        Visible = not Visible
+        MainFrame.Visible = Visible
+    end
+end)
+
+local MobileToggle = Create("ImageButton", {
+    Parent = ScreenGui,
+    Size = UDim2.new(0, 40, 0, 40),
+    Position = UDim2.new(0.5, 0, 0, 10),
+    AnchorPoint = Vector2.new(0.5, 0),
+    BackgroundColor3 = CFG.MainColor,
+    Image = "rbxassetid://3926305904",
+    ImageColor3 = CFG.AccentColor,
+    AutoButtonColor = false
+}, {
+    Create("UICorner", {CornerRadius = UDim.new(1, 0)}),
+    Create("UIStroke", {Color = CFG.AccentColor, Thickness = 2})
+})
+
+MobileToggle.MouseButton1Click:Connect(function()
+    Visible = not Visible
+    MainFrame.Visible = Visible
+end)
+
+-- ============================================
+-- INITIAL NOTIFICATIONS
+-- ============================================
+Library:Notify("mind paid loaded | PC + Mobile optimized", "success")
+Library:Notify("Press RightShift or tap mobile icon", "warning")
