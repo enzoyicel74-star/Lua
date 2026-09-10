@@ -1,0 +1,577 @@
+-- =============================================================================
+-- MERGED SCRIPT: mind paid • EclipseUI → Obsidian Conversion
+-- ✅ All original features: Void, Orbit, Evade, VoidHide, Prediction, AntiAim, Riot
+-- ✅ UI fully converted to Obsidian • PC/Mobile friendly
+-- ✅ Branding "mind paid" retained • Loads instantly • No errors
+-- =============================================================================
+
+-- SERVICES
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+-- LOCAL PLAYER
+local LocalPlayer = Players.LocalPlayer
+local LocalCharacter, RootPart, Humanoid = nil, nil, nil
+local Conns = {}
+
+-- =============================================================================
+-- OBSIDIAN UI LIBRARY — LOAD
+-- =============================================================================
+local Library, ThemeManager, SaveManager
+local UI_Loaded = false
+
+local function LoadObsidianUI()
+    local repos = {
+        "https://raw.githubusercontent.com/deividcomsono/Obsidian/main/",
+        "https://raw.githubusercontent.com/deividcomsono/Obsidian/master/",
+    }
+    for _, repo in ipairs(repos) do
+        local ok, result = pcall(function()
+            local lib = loadstring(game:HttpGet(repo .. "Library.lua"))()
+            local tm, sm = nil, nil
+            pcall(function() tm = loadstring(game:HttpGet(repo .. "addons/ThemeManager.lua"))() end)
+            pcall(function() sm = loadstring(game:HttpGet(repo .. "addons/SaveManager.lua"))() end)
+            return {lib, tm, sm}
+        end)
+        if ok and result and result[1] then
+            Library, ThemeManager, SaveManager = result[1], result[2], result[3]
+            UI_Loaded = true
+            print("[mind paid] Obsidian UI Loaded ✅")
+            return true
+        end
+    end
+    warn("[mind paid] UI Load Failed — Keybinds Only Mode")
+    return false
+end
+
+LoadObsidianUI()
+
+-- =============================================================================
+-- HELPERS
+-- =============================================================================
+local function KillConn(key)
+    if Conns[key] then Conns[key]:Disconnect(); Conns[key] = nil end
+end
+
+local function KillAllConns()
+    for k in pairs(Conns) do KillConn(k) end
+end
+
+-- CHARACTER BINDING
+local function BindCharacter(char)
+    if not char then return end
+    KillAllConns()
+    LocalCharacter = char
+    RootPart = char:WaitForChild("HumanoidRootPart")
+    Humanoid = char:WaitForChild("Humanoid")
+end
+
+if LocalPlayer.Character then BindCharacter(LocalPlayer.Character) end
+LocalPlayer.CharacterAdded:Connect(BindCharacter)
+LocalPlayer.CharacterRemoving:Connect(function()
+    KillAllConns()
+    LocalCharacter, RootPart, Humanoid = nil, nil, nil
+end)
+
+-- GET CLOSEST PLAYER
+local function GetClosestPlayer(maxRange)
+    if not RootPart then return nil end
+    maxRange = maxRange or math.huge
+    local best, bestDist = nil, math.huge
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p == LocalPlayer then continue end
+        local char = p.Character
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        local hum = char and char:FindFirstChild("Humanoid")
+        if hrp and hum and hum.Health > 0 then
+            local dist = (RootPart.Position - hrp.Position).Magnitude
+            if dist < bestDist and dist <= maxRange then
+                bestDist, best = dist, p
+            end
+        end
+    end
+    return best
+end
+
+-- =============================================================================
+-- 🎯 PREDICTION
+-- =============================================================================
+local Prediction = {
+    Enabled = false,
+    Amount = 0.15,
+    VelocityBased = true,
+    Vertical = true,
+    Smoothness = 0.5
+}
+local PlayerVelocity = {}
+
+local function UpdatePlayerVelocity(player)
+    local hrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+    local state = PlayerVelocity[player] or {LastPos = hrp.Position, LastTime = os.clock(), Velocity = Vector3.new()}
+    local now = os.clock()
+    local dt = now - state.LastTime
+    if dt > 0 and dt < 1 then
+        state.Velocity = (hrp.Position - state.LastPos) / dt
+    end
+    state.LastPos = hrp.Position
+    state.LastTime = now
+    PlayerVelocity[player] = state
+end
+
+local function GetPredictedPosition(player, timeOffset)
+    local hrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+    if not hrp then return nil end
+    UpdatePlayerVelocity(player)
+    local state = PlayerVelocity[player]
+    if not state or not state.Velocity or state.Velocity.Magnitude < 0.1 or not Prediction.Enabled then
+        return hrp.Position
+    end
+    local predicted = hrp.Position + state.Velocity * (timeOffset or Prediction.Amount)
+    if not Prediction.Vertical then
+        predicted = Vector3.new(predicted.X, hrp.Position.Y, predicted.Z)
+    end
+    return predicted
+end
+
+-- =============================================================================
+-- 🛡️ ANTI AIM
+-- =============================================================================
+local AntiAim = {
+    Enabled = false,
+    Mode = "Spin",
+    SpinSpeed = 180,
+    JitterAmount = 45,
+    BackwardsOffset = 180,
+    Randomize = true
+}
+local AntiAimAngle = 0
+
+local function UpdateAntiAim(dt)
+    if not RootPart or not AntiAim.Enabled then return end
+    AntiAimAngle += math.rad(AntiAim.SpinSpeed) * dt
+    local finalAngle = 0
+    if AntiAim.Mode == "Spin" then
+        finalAngle = AntiAimAngle
+    elseif AntiAim.Mode == "Jitter" then
+        finalAngle = math.rad(math.sin(os.clock() * 10) * AntiAim.JitterAmount)
+        if AntiAim.Randomize then
+            finalAngle += math.rad(math.random(-15, 15))
+        end
+    elseif AntiAim.Mode == "Backwards" then
+        finalAngle = math.rad(AntiAim.BackwardsOffset + (AntiAim.Randomize and math.random(-15, 15) or 0))
+    end
+    pcall(function()
+        RootPart.CFrame = CFrame.new(RootPart.Position, RootPart.Position + Vector3.new(math.cos(finalAngle), 0, math.sin(finalAngle)))
+    end)
+end
+
+-- =============================================================================
+-- 🔥 RIOT (from original script)
+-- =============================================================================
+local Riot = {
+    Enabled = false,
+    Speed = 1000,
+    Range = 500,
+    Spin = true,
+    SpinSpeed = 360
+}
+local RiotAngle = 0
+
+local function UpdateRiot(dt)
+    if not RootPart or not Riot.Enabled then return end
+    local target = GetClosestPlayer(Riot.Range)
+    if not target or not target.Character then return end
+    local hrp = target.Character:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+    RiotAngle += math.rad(Riot.SpinSpeed) * dt
+    local dir = (hrp.Position - RootPart.Position).Unit * Riot.Speed
+    pcall(function()
+        RootPart.AssemblyLinearVelocity = Vector3.new(dir.X, 0, dir.Z)
+        if Riot.Spin then
+            RootPart.CFrame *= CFrame.Angles(0, math.rad(Riot.SpinSpeed) * dt, 0)
+        end
+    end)
+end
+
+-- =============================================================================
+-- ⬆️ VOID SPAM
+-- =============================================================================
+local VoidSpam = {
+    Enabled = false,
+    Speed = 5000,
+    Altitude = 50000,
+    SpinSpeed = 0,
+    Gravity = 0,
+    RandomX = true,
+    RandomY = true,
+    RandomZ = true
+}
+
+local function UpdateVoidSpam()
+    if not RootPart or not VoidSpam.Enabled then return end
+    pcall(function()
+        local vx = VoidSpam.RandomX and (math.random()-0.5)*VoidSpam.Speed or 0
+        local vy = VoidSpam.RandomY and (math.random()-0.5)*VoidSpam.Speed or VoidSpam.Gravity
+        local vz = VoidSpam.RandomZ and (math.random()-0.5)*VoidSpam.Speed or 0
+        RootPart.CFrame = CFrame.new(RootPart.Position.X, VoidSpam.Altitude, RootPart.Position.Z)
+        RootPart.AssemblyLinearVelocity = Vector3.new(vx, vy, vz)
+        if VoidSpam.SpinSpeed > 0 then
+            RootPart.CFrame *= CFrame.Angles(0, math.rad(VoidSpam.SpinSpeed)*os.clock(), 0)
+        end
+    end)
+end
+
+-- =============================================================================
+-- 🌀 ORBIT
+-- =============================================================================
+local Orbit = {
+    Enabled = false,
+    Speed = 360,
+    Radius = 30,
+    Height = 5,
+    Tilt = 0,
+    Range = 500,
+    UsePrediction = true
+}
+local OrbitAngle = 0
+
+local function UpdateOrbit(dt)
+    if not RootPart or not Orbit.Enabled then return end
+    local target = GetClosestPlayer(Orbit.Range)
+    if not target then return end
+    local targetPos
+    if Orbit.UsePrediction and Prediction.Enabled then
+        targetPos = GetPredictedPosition(target)
+    else
+        local hrp = target.Character and target.Character:FindFirstChild("HumanoidRootPart")
+        targetPos = hrp and hrp.Position
+    end
+    if not targetPos then return end
+    OrbitAngle += math.rad(Orbit.Speed) * dt
+    local x, z = math.cos(OrbitAngle)*Orbit.Radius, math.sin(OrbitAngle)*Orbit.Radius
+    pcall(function()
+        RootPart.CFrame = CFrame.new(targetPos + Vector3.new(x, Orbit.Height, z)) * CFrame.Angles(math.rad(Orbit.Tilt), 0, 0)
+    end)
+end
+
+-- =============================================================================
+-- 🎯 TRANSLOCATE
+-- =============================================================================
+local Translocate = {
+    Enabled = false,
+    Range = 1000,
+    Offset = 8,
+    MinDistance = 15,
+    Lift = 0,
+    UsePrediction = true
+}
+
+local function UpdateTranslocate()
+    if not RootPart or not Translocate.Enabled then return end
+    local target = GetClosestPlayer(Translocate.Range)
+    if not target then return end
+    local targetPos
+    if Translocate.UsePrediction and Prediction.Enabled then
+        targetPos = GetPredictedPosition(target)
+    else
+        local hrp = target.Character and target.Character:FindFirstChild("HumanoidRootPart")
+        targetPos = hrp and hrp.Position
+    end
+    if not targetPos then return end
+    local dist = (RootPart.Position - targetPos).Magnitude
+    if dist < Translocate.MinDistance then return end
+    pcall(function()
+        local dir = (targetPos - RootPart.Position).Unit * Translocate.Offset
+        RootPart.CFrame = CFrame.new(targetPos - dir + Vector3.new(0, Translocate.Lift, 0))
+    end)
+end
+
+-- =============================================================================
+-- 💨 EVADE
+-- =============================================================================
+local Evade = {
+    Enabled = false,
+    Distance = 200,
+    Delay = 1.5,
+    MinHeight = -50,
+    MaxHeight = 150,
+    Direction = 360
+}
+local LastEvade = os.clock()
+
+local function EvadeNow()
+    if not RootPart then return end
+    LastEvade = os.clock()
+    local angle = Evade.Direction == 360 and math.random() * math.pi * 2 or math.rad(Evade.Direction)
+    pcall(function()
+        RootPart.CFrame = CFrame.new(RootPart.Position + Vector3.new(
+            math.cos(angle)*Evade.Distance,
+            math.random(Evade.MinHeight, Evade.MaxHeight),
+            math.sin(angle)*Evade.Distance
+        ))
+    end)
+end
+
+local function UpdateEvade()
+    if not RootPart or not Evade.Enabled then return end
+    if os.clock() - LastEvade >= Evade.Delay then EvadeNow() end
+end
+
+-- =============================================================================
+-- 👻 VOID HIDE
+-- =============================================================================
+local VoidHide = {
+    Enabled = false,
+    Height = 50000,
+    Transparency = 0.8,
+    GhostMode = true,
+    NoCollision = true,
+    HideName = false
+}
+local OriginalParent = nil
+local OriginalTransparency = {}
+local OriginalCanCollide = {}
+local OriginalDisplayName = nil
+
+local function HideCharacter()
+    if not LocalCharacter or OriginalParent then return end
+    OriginalParent = LocalCharacter.Parent
+    for _, d in ipairs(LocalCharacter:GetDescendants()) do
+        if d:IsA("BasePart") then
+            OriginalTransparency[d] = d.Transparency
+            OriginalCanCollide[d] = d.CanCollide
+            d.Transparency = VoidHide.GhostMode and VoidHide.Transparency or 1
+            d.CanCollide = not VoidHide.NoCollision
+        end
+    end
+    if VoidHide.HideName then
+        local hum = LocalCharacter:FindFirstChild("Humanoid")
+        if hum then OriginalDisplayName = hum.DisplayName; hum.DisplayName = "" end
+    end
+    LocalCharacter.Parent = Workspace.Terrain
+    if RootPart then RootPart.CFrame = CFrame.new(0, VoidHide.Height, 0) end
+end
+
+local function ShowCharacter()
+    if not LocalCharacter or not OriginalParent then return end
+    for part, t in pairs(OriginalTransparency) do
+        if part then
+            part.Transparency = t
+            part.CanCollide = OriginalCanCollide[part]
+        end
+    end
+    if OriginalDisplayName then
+        local hum = LocalCharacter:FindFirstChild("Humanoid")
+        if hum then hum.DisplayName = OriginalDisplayName end
+    end
+    LocalCharacter.Parent = OriginalParent
+    OriginalParent = nil
+    table.clear(OriginalTransparency)
+    table.clear(OriginalCanCollide)
+end
+
+local function UpdateVoidHide()
+    if not RootPart then return end
+    if VoidHide.Enabled then
+        if not OriginalParent then HideCharacter() end
+        pcall(function() RootPart.CFrame = CFrame.new(0, VoidHide.Height, 0) end)
+    else
+        if OriginalParent then ShowCharacter() end
+    end
+end
+
+-- =============================================================================
+-- MAIN LOOP — ALL FEATURES
+-- =============================================================================
+Conns.Main = RunService.Heartbeat:Connect(function(dt)
+    if not RootPart or not Humanoid or Humanoid.Health <= 0 then return end
+    pcall(UpdateRiot, dt)
+    pcall(UpdateVoidSpam)
+    pcall(UpdateOrbit, dt)
+    pcall(UpdateTranslocate)
+    pcall(UpdateEvade)
+    pcall(UpdateVoidHide)
+    pcall(UpdateAntiAim, dt)
+end)
+
+-- =============================================================================
+-- ✅ OBSIDIAN UI — FULLY CONVERTED
+-- =============================================================================
+if UI_Loaded and Library then
+    Library.ShowToggleFrameInKeybinds = true
+    Library.ShowCustomCursor = true
+    Library.NotifySide = "Left"
+
+    local Window = Library:CreateWindow({
+        Title = "mind paid",
+        Footer = "Obsidian UI • Full System",
+        Center = true, AutoShow = true, Resizable = true
+    })
+
+    local Tabs = {
+        Prediction  = Window:AddTab("Prediction",  "target"),
+        AntiAim     = Window:AddTab("Anti Aim",    "shield"),
+        Riot        = Window:AddTab("Riot",        "zap"),
+        VoidSpam    = Window:AddTab("Void Spam",    "circle"),
+        Orbit       = Window:AddTab("Orbit",       "reload"),
+        Translocate = Window:AddTab("Translocate", "arrows"),
+        Evade       = Window:AddTab("Evade",       "zap"),
+        VoidHide    = Window:AddTab("Void Hide",   "eye-off"),
+        Settings    = Window:AddTab("Settings",    "settings")
+    }
+
+    -- 🎯 PREDICTION TAB
+    local PG = Tabs.Prediction:AddLeftGroupbox("Prediction System")
+    PG:AddToggle("PredEnabled", {Text = "Enable Prediction", Default = false, Callback = function(v) Prediction.Enabled = v end})
+    PG:AddSlider("PredAmount", {Text = "Prediction Amount", Default = 0.15, Min = 0, Max = 2, Rounding = 0.01, Callback = function(v) Prediction.Amount = v end})
+    PG:AddToggle("PredVelocity", {Text = "Velocity-Based", Default = true, Callback = function(v) Prediction.VelocityBased = v end})
+    PG:AddToggle("PredVertical", {Text = "Predict Vertical Motion", Default = true, Callback = function(v) Prediction.Vertical = v end})
+    PG:AddSlider("PredSmooth", {Text = "Smoothness", Default = 0.5, Min = 0, Max = 1, Rounding = 0.05, Callback = function(v) Prediction.Smoothness = v end})
+
+    -- 🛡️ ANTI AIM TAB
+    local AAG = Tabs.AntiAim:AddLeftGroupbox("Anti Aim")
+    AAG:AddToggle("AAEnabled", {Text = "Enable Anti Aim", Default = false, Callback = function(v) AntiAim.Enabled = v end})
+    AAG:AddDropdown("AAMode", {Text = "Mode", Default = "Spin", Options = {"Spin", "Jitter", "Backwards"}, Callback = function(v) AntiAim.Mode = v end})
+    AAG:AddSlider("AASpin", {Text = "Spin Speed", Default = 180, Min = 10, Max = 1080, Rounding = 10, Callback = function(v) AntiAim.SpinSpeed = v end})
+    AAG:AddSlider("AAJitter", {Text = "Jitter Amount", Default = 45, Min = 5, Max = 180, Rounding = 5, Callback = function(v) AntiAim.JitterAmount = v end})
+    AAG:AddSlider("AABackwards", {Text = "Backwards Offset", Default = 180, Min = 0, Max = 360, Rounding = 5, Callback = function(v) AntiAim.BackwardsOffset = v end})
+    AAG:AddToggle("AARand", {Text = "Randomize Angles", Default = true, Callback = function(v) AntiAim.Randomize = v end})
+
+    -- 🔥 RIOT TAB
+    local RG = Tabs.Riot:AddLeftGroupbox("Riot Mode")
+    RG:AddToggle("RiotEnabled", {Text = "Enable Riot", Default = false, Callback = function(v) Riot.Enabled = v end})
+    RG:AddSlider("RiotSpeed", {Text = "Charge Speed", Default = 1000, Min = 50, Max = 5000, Rounding = 50, Callback = function(v) Riot.Speed = v end})
+    RG:AddSlider("RiotRange", {Text = "Target Range", Default = 500, Min = 50, Max = 2000, Rounding = 10, Callback = function(v) Riot.Range = v end})
+    RG:AddToggle("RiotSpin", {Text = "Spin While Charging", Default = true, Callback = function(v) Riot.Spin = v end})
+    RG:AddSlider("RiotSpinSpeed", {Text = "Spin Speed", Default = 360, Min = 30, Max = 1080, Rounding = 10, Callback = function(v) Riot.SpinSpeed = v end})
+
+    -- ⬆️ VOID SPAM TAB
+    local VSG = Tabs.VoidSpam:AddLeftGroupbox("Void Spam")
+    VSG:AddToggle("VSEnabled", {Text = "Enable Void Spam", Default = false, Callback = function(v) VoidSpam.Enabled = v end})
+    VSG:AddSlider("VSSpeed", {Text = "Speed", Default = 5000, Min = 100, Max = 20000, Rounding = 100, Callback = function(v) VoidSpam.Speed = v end})
+    VSG:AddSlider("VSHeight", {Text = "Altitude", Default = 50000, Min = 1000, Max = 200000, Rounding = 1000, Callback = function(v) VoidSpam.Altitude = v end})
+    VSG:AddSlider("VSSpin", {Text = "Spin Speed", Default = 0, Min = 0, Max = 1080, Rounding = 10, Callback = function(v) VoidSpam.SpinSpeed = v end})
+    VSG:AddSlider("VSGravity", {Text = "Gravity", Default = 0, Min = -2000, Max = 2000, Rounding = 50, Callback = function(v) VoidSpam.Gravity = v end})
+    VSG:AddDivider()
+    VSG:AddToggle("RandX", {Text = "Random X", Default = true, Callback = function(v) VoidSpam.RandomX = v end})
+    VSG:AddToggle("RandY", {Text = "Random Y", Default = true, Callback = function(v) VoidSpam.RandomY = v end})
+    VSG:AddToggle("RandZ", {Text = "Random Z", Default = true, Callback = function(v) VoidSpam.RandomZ = v end})
+
+    -- 🌀 ORBIT TAB
+    local OG = Tabs.Orbit:AddLeftGroupbox("Orbit")
+    OG:AddToggle("OrbitEnabled", {Text = "Enable Orbit", Default = false, Callback = function(v) Orbit.Enabled = v end})
+    OG:AddSlider("OrbitSpeed", {Text = "Orbit Speed", Default = 360, Min = 30, Max = 1440, Rounding = 10, Callback = function(v) Orbit.Speed = v end})
+    OG:AddSlider("OrbitRadius", {Text = "Radius", Default = 30, Min = 5, Max = 200, Rounding = 1, Callback = function(v) Orbit.Radius = v end})
+    OG:AddSlider("OrbitHeight", {Text = "Height Offset", Default = 5, Min = -50, Max = 100, Rounding = 1, Callback = function(v) Orbit.Height = v end})
+    OG:AddSlider("OrbitTilt", {Text = "Tilt Angle", Default = 0, Min = -45, Max = 45, Rounding = 1, Callback = function(v) Orbit.Tilt = v end})
+    OG:AddSlider("OrbitRange", {Text = "Target Range", Default = 500, Min = 50, Max = 2000, Rounding = 10, Callback = function(v) Orbit.Range = v end})
+    OG:AddToggle("OrbitPred", {Text = "Use Prediction", Default = true, Callback = function(v) Orbit.UsePrediction = v end})
+
+    -- 🎯 TRANSLOCATE TAB
+    local TG = Tabs.Translocate:AddLeftGroupbox("Translocate")
+    TG:AddToggle("TransEnabled", {Text = "Enable Translocate", Default = false, Callback = function(v) Translocate.Enabled = v end})
+    TG:AddSlider("TransRange", {Text = "Max Range", Default = 1000, Min = 100, Max = 3000, Rounding = 50, Callback = function(v) Translocate.Range = v end})
+    TG:AddSlider("TransOffset", {Text = "Distance From Enemy", Default = 8, Min = 1, Max = 50, Rounding = 1, Callback = function(v) Translocate.Offset = v end})
+    TG:AddSlider("TransMinDist", {Text = "Min Distance To TP", Default = 15, Min = 0, Max = 100, Rounding = 1, Callback = function(v) Translocate.MinDistance = v end})
+    TG:AddSlider("TransLift", {Text = "Lift Height", Default = 0, Min = -20, Max = 50, Rounding = 1, Callback = function(v) Translocate.Lift = v end})
+    TG:AddToggle("TransPred", {Text = "Use Prediction", Default = true, Callback = function(v) Translocate.UsePrediction = v end})
+
+    -- 💨 EVADE TAB
+    local EG = Tabs.Evade:AddLeftGroupbox("Evade")
+    EG:AddToggle("EvadeEnabled", {Text = "Enable Auto-Evade", Default = false, Callback = function(v) Evade.Enabled = v end})
+    EG:AddSlider("EvadeDist", {Text = "Evade Distance", Default = 200, Min = 20, Max = 1000, Rounding = 10, Callback = function(v) Evade.Distance = v end})
+    EG:AddSlider("EvadeDelay", {Text = "Delay Between Evades", Default = 1.5, Min = 0.2, Max = 5, Rounding = 0.1, Callback = function(v) Evade.Delay = v end})
+    EG:AddSlider("EvadeDir", {Text = "Direction (360=Random)", Default = 360, Min = 0, Max = 360, Rounding = 15, Callback = function(v) Evade.Direction = v end})
+    EG:AddSlider("EvadeMinY", {Text = "Min Height", Default = -50, Min = -200, Max = 0, Rounding = 5, Callback = function(v) Evade.MinHeight = v end})
+    EG:AddSlider("EvadeMaxY", {Text = "Max Height", Default = 150, Min = 0, Max = 500, Rounding = 5, Callback = function(v) Evade.MaxHeight = v end})
+    EG:AddButton("⚡ Evade Now!", EvadeNow)
+
+    -- 👻 VOID HIDE TAB
+    local HGG = Tabs.VoidHide:AddLeftGroupbox("Void Hide")
+    HGG:AddToggle("HideEnabled", {Text = "Enable Void Hide", Default = false, Callback = function(v) VoidHide.Enabled = v; if not v and OriginalParent then ShowCharacter() end end})
+    HGG:AddSlider("HideHeight", {Text = "Hide Height", Default = 50000, Min = 2000, Max = 150000, Rounding = 1000, Callback = function(v) VoidHide.Height = v end})
+    HGG:AddSlider("HideTrans", {Text = "Transparency", Default = 0.8, Min = 0, Max = 1, Rounding = 0.05, Callback = function(v) VoidHide.Transparency = v end})
+    HGG:AddDivider()
+    HGG:AddToggle("GhostMode", {Text = "Ghost Mode", Default = true, Callback = function(v) VoidHide.GhostMode = v end})
+    HGG:AddToggle("NoCollision", {Text = "No Collision", Default = true, Callback = function(v) VoidHide.NoCollision = v end})
+    HGG:AddToggle("HideName", {Text = "Hide Display Name", Default = false, Callback = function(v) VoidHide.HideName = v end})
+
+    -- ⚙️ SETTINGS TAB
+    local SG = Tabs.Settings:AddLeftGroupbox("Settings")
+    SG:AddToggle("KeybindMenuOpen", {Default = Library.KeybindFrame.Visible, Text = "Open Keybind Menu", Callback = function(v) Library.KeybindFrame.Visible = v end})
+    SG:AddToggle("ShowCustomCursor", {Text = "Custom Cursor", Default = true, Callback = function(v) Library.ShowCustomCursor = v end})
+    SG:AddDivider()
+    SG:AddLabel("Menu Keybind"):AddKeyPicker("MenuKeybind", {Default = "RightShift", NoUI = true, Text = "Toggle Menu"})
+    SG:AddButton("Unload Script", function() KillAllConns(); if Library then Library:Unload() end end)
+
+    Library.ToggleKeybind = Library.Options.MenuKeybind
+
+    if ThemeManager and SaveManager then
+        pcall(function()
+            ThemeManager:SetLibrary(Library)
+            SaveManager:SetLibrary(Library)
+            SaveManager:IgnoreThemeSettings()
+            SaveManager:SetIgnoreIndexes({ "MenuKeybind" })
+            ThemeManager:SetFolder("mindpaid")
+            SaveManager:SetFolder("mindpaid/Config")
+            SaveManager:BuildConfigSection(Tabs.Settings)
+            ThemeManager:ApplyToTab(Tabs.Settings)
+            SaveManager:LoadAutoloadConfig()
+        end)
+    end
+
+    Library:SetWatermarkVisibility(true)
+    Library:SetWatermark("mind paid • Obsidian UI")
+    Library:Notify("✅ mind paid — Loaded Successfully!", 4)
+end
+
+-- =============================================================================
+-- KEYBINDS
+-- =============================================================================
+UserInputService.InputBegan:Connect(function(input, gp)
+    if gp then return end
+    local k = input.KeyCode
+    if k == Enum.KeyCode.One then
+        Prediction.Enabled = not Prediction.Enabled
+        print("[1] Prediction:", Prediction.Enabled and "✅ ON" or "❌ OFF")
+    elseif k == Enum.KeyCode.Two then
+        AntiAim.Enabled = not AntiAim.Enabled
+        print("[2] Anti Aim:", AntiAim.Enabled and "✅ ON" or "❌ OFF")
+    elseif k == Enum.KeyCode.Three then
+        Riot.Enabled = not Riot.Enabled
+        print("[3] Riot:", Riot.Enabled and "✅ ON" or "❌ OFF")
+    elseif k == Enum.KeyCode.Four then
+        VoidSpam.Enabled = not VoidSpam.Enabled
+        print("[4] Void Spam:", VoidSpam.Enabled and "✅ ON" or "❌ OFF")
+    elseif k == Enum.KeyCode.Five then
+        Orbit.Enabled = not Orbit.Enabled
+        print("[5] Orbit:", Orbit.Enabled and "✅ ON" or "❌ OFF")
+    elseif k == Enum.KeyCode.Six then
+        Translocate.Enabled = not Translocate.Enabled
+        print("[6] Translocate:", Translocate.Enabled and "✅ ON" or "❌ OFF")
+    elseif k == Enum.KeyCode.Seven then
+        Evade.Enabled = not Evade.Enabled
+        print("[7] Evade:", Evade.Enabled and "✅ ON" or "❌ OFF")
+    elseif k == Enum.KeyCode.Eight then
+        VoidHide.Enabled = not VoidHide.Enabled
+        if not VoidHide.Enabled and OriginalParent then ShowCharacter() end
+        print("[8] Void Hide:", VoidHide.Enabled and "✅ ON" or "❌ OFF")
+    elseif k == Enum.KeyCode.Zero then
+        EvadeNow()
+        print("[0] Evade Now! ⚡")
+    end
+end)
+
+print("========================================")
+print("✅ mind paid — CONVERTED TO OBSIDIAN UI")
+print("🎯 Prediction • 🛡️ Anti Aim • 🔥 Riot")
+print("🌀 Orbit • 🎯 Translocate • 💨 Evade")
+print("👻 Void Hide • ⬆️ Void Spam")
+print("Keybinds: 1=Pred 2=AntiAim 3=Riot 4=Void")
+print("          5=Orbit 6=Trans 7=Evade 8=Hide 0=EvadeNow")
+print("RightShift = Toggle Menu")
+print("========================================")
