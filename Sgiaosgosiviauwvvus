@@ -1,0 +1,821 @@
+-- ============================================================
+-- RIVALS | build: 2.0 (UE-CLONE) | made by Enzo
+-- silent / aimbot / rage / visuals
+-- ============================================================
+
+local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/deividcomsono/Obsidian/main/Library.lua"))()
+local Options = Library.Options
+
+local Window = Library:CreateWindow({
+    Title = "Rivals",
+    Footer = "build 2.0 | made by Enzo",
+    Center = true,
+    AutoShow = true,
+    Resizable = true,
+    MobileButtonsSide = "Left"
+})
+
+local function Notify(text, duration)
+    Library:Notify({ Title = "Rivals", Description = text, Time = duration or 3 })
+end
+
+local Players           = game:GetService("Players")
+local RunService        = game:GetService("RunService")
+local UserInputService  = game:GetService("UserInputService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local LocalPlayer       = Players.LocalPlayer
+
+local char, root, hum
+local camera = workspace.CurrentCamera
+
+local function bindChar(c)
+    char = c
+    root = c:WaitForChild("HumanoidRootPart", 5)
+    hum  = c:WaitForChild("Humanoid", 5)
+end
+
+if LocalPlayer.Character then bindChar(LocalPlayer.Character) end
+
+LocalPlayer.CharacterAdded:Connect(function(c)
+    bindChar(c)
+    task.wait(0.3)
+    if silentEnabled then startSilent() end
+    if aimbotEnabled then startAimbot() end
+    if rageEnabled   then startRage()   end
+end)
+
+LocalPlayer.CharacterRemoving:Connect(function()
+    root = nil; hum = nil; char = nil
+end)
+
+-- ============================================================
+-- CONFIG
+-- ============================================================
+
+-- Silent Aim
+local silentEnabled   = false
+local silentConn      = nil
+local silentFOV       = 200
+local silentAimPart   = "Head"
+local silentPriority  = "Closest"
+local silentVisible   = true
+local silentTeamCheck = true
+local silentSmoothing = 1
+
+-- Aimbot
+local aimbotEnabled   = false
+local aimbotConn      = nil
+local aimbotFOV       = 150
+local aimbotAimPart   = "Head"
+local aimbotPriority  = "Closest"
+local aimbotVisible   = true
+local aimbotTeamCheck = true
+local aimbotSmooth    = 0.3
+local aimbotHold      = false
+local aimbotTarget    = nil
+
+-- Rage
+local rageEnabled     = false
+local rageConn        = nil
+local rageFOV         = 360
+local rageAimPart     = "Head"
+local ragePriority    = "Closest"
+local rageTeamCheck   = true
+local rageVisible     = false       -- wallbang default
+local rageAutoFire    = true
+local rageShootDelay  = 0.05
+local rageWeaponType  = "Primary"
+local ragePrimaryW    = "Auto"
+local rageSecondaryW  = "Auto"
+local rageMeleeW      = "Auto"
+local rageLocked      = nil
+local rageLastSwitch  = 0
+local rageLastShot    = 0
+local rageTPEnabled   = false
+local rageTPDist      = 4
+local rageTPHold      = 0.08
+local rageHitbox      = false
+local rageHitboxSize  = 15
+local rageBacktrack   = false
+local rageBacktrackT  = 0.15
+local rageBacktrackCache = {}
+local rageRemoteCache = nil
+local rageRemoteTime  = 0
+
+-- FOV Visual
+local fovVisual = {
+    enabled      = true,
+    color        = Color3.fromRGB(255, 60, 60),
+    transparency = 0.7,
+    thickness    = 1,
+    sides        = 80,
+    filled       = false,
+    fillAlpha    = 0.2,
+    rotate       = false,
+    rotationSpeed = 30,
+    showOnSilent = true,
+    showOnAimbot = true,
+    showOnRage   = true,
+    circle       = nil,
+    fillCircle   = nil,
+    rotation     = 0
+}
+
+-- ============================================================
+-- HELPERS
+-- ============================================================
+
+local function getAimPart(plr, part)
+    if not plr.Character then return nil end
+    if part == "Head" then
+        return plr.Character:FindFirstChild("Head")
+    elseif part == "UpperTorso" then
+        return plr.Character:FindFirstChild("UpperTorso") or plr.Character:FindFirstChild("Torso")
+    else
+        return plr.Character:FindFirstChild("HumanoidRootPart")
+    end
+end
+
+local function isVisible(targetPart)
+    local origin = camera.CFrame.Position
+    local dir = targetPart.Position - origin
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    local filter = {camera}
+    if LocalPlayer.Character then table.insert(filter, LocalPlayer.Character) end
+    params.FilterDescendantsInstances = filter
+    local result = workspace:Raycast(origin, dir, params)
+    if result then
+        return result.Instance:IsDescendantOf(targetPart.Parent)
+    end
+    return true
+end
+
+local function pickScore(priority, p, screenPos, distToCenter, aimPart)
+    if priority == "Health" then
+        local h = p.Character:FindFirstChildOfClass("Humanoid")
+        return h and h.Health or math.huge
+    elseif priority == "Distance" then
+        return (root.Position - aimPart.Position).Magnitude
+    else
+        return distToCenter
+    end
+end
+
+local function scanTargets(fov, aimPartName, priority, visibleCheck, teamCheck)
+    if not root then return nil end
+    local best, bestScore = nil, math.huge
+    local center = Vector2.new(camera.ViewportSize.X / 2, camera.ViewportSize.Y / 2)
+
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p == LocalPlayer then continue end
+        if teamCheck and p.Team and LocalPlayer.Team and p.Team == LocalPlayer.Team then continue end
+        if not p.Character then continue end
+
+        local humanoid = p.Character:FindFirstChildOfClass("Humanoid")
+        if not humanoid or humanoid.Health <= 0 then continue end
+
+        local aimPart = getAimPart(p, aimPartName)
+        if not aimPart then continue end
+
+        local screenPos, onScreen = camera:WorldToViewportPoint(aimPart.Position)
+        if not onScreen then continue end
+
+        local distToCenter = (Vector2.new(screenPos.X, screenPos.Y) - center).Magnitude
+        if distToCenter > fov then continue end
+
+        if visibleCheck and not isVisible(aimPart) then continue end
+
+        local score = pickScore(priority, p, screenPos, distToCenter, aimPart)
+        if score < bestScore then
+            bestScore = score
+            best = p
+        end
+    end
+    return best
+end
+
+-- ============================================================
+-- SILENT AIM
+-- ============================================================
+
+local function silentLoop(dt)
+    if not silentEnabled or not root or not hum or hum.Health <= 0 then return end
+    local target = scanTargets(silentFOV, silentAimPart, silentPriority, silentVisible, silentTeamCheck)
+    if not target then return end
+
+    local aimPart = getAimPart(target, silentAimPart)
+    if not aimPart then return end
+
+    local desired = CFrame.new(camera.CFrame.Position, aimPart.Position)
+    if silentSmoothing >= 1 then
+        camera.CFrame = desired
+    else
+        camera.CFrame = camera.CFrame:Lerp(desired, silentSmoothing)
+    end
+end
+
+function startSilent()
+    if silentConn then silentConn:Disconnect() end
+    silentConn = RunService.RenderStepped:Connect(silentLoop)
+end
+function stopSilent()
+    if silentConn then silentConn:Disconnect(); silentConn = nil end
+end
+
+-- ============================================================
+-- AIMBOT
+-- ============================================================
+
+local function aimbotLoop(dt)
+    if not aimbotEnabled or not root or not hum or hum.Health <= 0 then return end
+
+    local shouldAim = aimbotHold or UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
+    if not shouldAim then aimbotTarget = nil; return end
+
+    local target = scanTargets(aimbotFOV, aimbotAimPart, aimbotPriority, aimbotVisible, aimbotTeamCheck)
+    aimbotTarget = target
+    if not target then return end
+
+    local aimPart = getAimPart(target, aimbotAimPart)
+    if not aimPart then return end
+
+    local desired = CFrame.new(camera.CFrame.Position, aimPart.Position)
+    camera.CFrame = camera.CFrame:Lerp(desired, aimbotSmooth)
+end
+
+function startAimbot()
+    if aimbotConn then aimbotConn:Disconnect() end
+    aimbotConn = RunService.RenderStepped:Connect(aimbotLoop)
+end
+function stopAimbot()
+    if aimbotConn then aimbotConn:Disconnect(); aimbotConn = nil end
+    aimbotTarget = nil
+end
+
+-- ============================================================
+-- RAGE BOT
+-- ============================================================
+
+local function getToolsInBackpack()
+    local t = {}
+    local bp = LocalPlayer:FindFirstChildOfClass("Backpack")
+    if bp then for _, i in ipairs(bp:GetChildren()) do if i:IsA("Tool") then table.insert(t, i.Name) end end end
+    return t
+end
+local function getToolsInCharacter()
+    local t = {}
+    if char then for _, i in ipairs(char:GetChildren()) do if i:IsA("Tool") then table.insert(t, i.Name) end end end
+    return t
+end
+local function getAllTools()
+    local t, seen = {}, {}
+    for _, n in ipairs(getToolsInBackpack()) do if not seen[n] then seen[n] = true; table.insert(t, n) end end
+    for _, n in ipairs(getToolsInCharacter()) do if not seen[n] then seen[n] = true; table.insert(t, n) end end
+    return t
+end
+local function findTool(name)
+    if not char then return nil end
+    for _, i in ipairs(char:GetChildren()) do if i:IsA("Tool") and i.Name == name then return i end end
+    local bp = LocalPlayer:FindFirstChildOfClass("Backpack")
+    if bp then for _, i in ipairs(bp:GetChildren()) do if i:IsA("Tool") and i.Name == name then return i end end end
+    return nil
+end
+local function getEquippedTool()
+    if not char then return nil end
+    for _, i in ipairs(char:GetChildren()) do if i:IsA("Tool") then return i end end
+    return nil
+end
+
+local function equipRageWeapon()
+    local name
+    if rageWeaponType == "Primary" then name = ragePrimaryW
+    elseif rageWeaponType == "Secondary" then name = rageSecondaryW
+    else name = rageMeleeW end
+    if not name or name == "Auto" or name == "" then return end
+    local equipped = getEquippedTool()
+    if equipped and equipped.Name == name then return end
+    local tool = findTool(name)
+    if tool and hum and tool.Parent ~= char then pcall(function() hum:EquipTool(tool) end) end
+end
+
+local function buildRemoteCache()
+    local cache = {}
+    local keywords = {"fire","shoot","attack","hit","click","damage","dmg","bullet","weapon","gun","kill","slice","stab","swing","melee","ray","projectile","cast"}
+    for _, remote in ipairs(ReplicatedStorage:GetDescendants()) do
+        if remote:IsA("RemoteEvent") or remote:IsA("RemoteFunction") then
+            local n = remote.Name:lower()
+            for _, kw in ipairs(keywords) do
+                if n:find(kw) then table.insert(cache, {remote = remote, isFunc = remote:IsA("RemoteFunction")}) break end
+            end
+        end
+    end
+    return cache
+end
+
+local function getRemoteCache()
+    if not rageRemoteCache or tick() - rageRemoteTime > 30 then
+        rageRemoteCache = buildRemoteCache()
+        rageRemoteTime = tick()
+    end
+    return rageRemoteCache
+end
+
+local function updateBacktrack()
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p == LocalPlayer then continue end
+        if not p.Character then rageBacktrackCache[p] = nil; continue end
+        local hrp = p.Character:FindFirstChild("HumanoidRootPart")
+        if not hrp then continue end
+        if not rageBacktrackCache[p] then rageBacktrackCache[p] = {} end
+        local c = rageBacktrackCache[p]
+        table.insert(c, {pos = hrp.Position, time = tick()})
+        while #c > 0 and tick() - c[1].time > 0.3 do table.remove(c, 1) end
+    end
+end
+
+local function getBacktrackPos(p)
+    local c = rageBacktrackCache[p]
+    if not c or #c == 0 then return nil end
+    local targetTime = tick() - rageBacktrackT
+    local best, bestDiff = nil, math.huge
+    for _, entry in ipairs(c) do
+        local diff = math.abs(entry.time - targetTime)
+        if diff < bestDiff then bestDiff = diff; best = entry.pos end
+    end
+    return best
+end
+
+local function applyHitbox()
+    if not rageHitbox then return end
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p == LocalPlayer or not p.Character then continue end
+        local hrp = p.Character:FindFirstChild("HumanoidRootPart")
+        if not hrp then continue end
+        if not hrp:FindFirstChild("RageHitboxMarker") then
+            pcall(function()
+                hrp.Size = Vector3.new(rageHitboxSize, rageHitboxSize, rageHitboxSize)
+                hrp.Transparency = 1
+                hrp.CanCollide = false
+                local marker = Instance.new("BoolValue")
+                marker.Name = "RageHitboxMarker"
+                marker.Parent = hrp
+            end)
+        end
+    end
+end
+
+local function clearHitbox()
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p == LocalPlayer or not p.Character then continue end
+        local hrp = p.Character:FindFirstChild("HumanoidRootPart")
+        if hrp and hrp:FindFirstChild("RageHitboxMarker") then
+            pcall(function()
+                hrp.Size = Vector3.new(2, 2, 1)
+                hrp.Transparency = 1
+                hrp.CanCollide = false
+                hrp.RageHitboxMarker:Destroy()
+            end)
+        end
+    end
+end
+
+local function fireRage()
+    if not rageAutoFire then return end
+    if tick() - rageLastShot < rageShootDelay then return end
+    rageLastShot = tick()
+
+    local tool = getEquippedTool()
+    if tool then
+        pcall(function() tool:Activate() end)
+        for _, c in ipairs(tool:GetDescendants()) do
+            if c:IsA("RemoteEvent") then pcall(function() c:FireServer() end) end
+            if c:IsA("RemoteFunction") then pcall(function() c:InvokeServer() end) end
+        end
+    end
+
+    for _, entry in ipairs(getRemoteCache()) do
+        if entry.isFunc then pcall(function() entry.remote:InvokeServer() end)
+        else pcall(function() entry.remote:FireServer() end) end
+    end
+end
+
+local function silentTPKill(target)
+    if not target or not target.Character or not root then return end
+    local aimPart = getAimPart(target, rageAimPart)
+    if not aimPart then return end
+
+    local targetPos = aimPart.Position
+    local savedCFrame = root.CFrame
+    local savedCam = camera.CFrame
+
+    local dir = (root.Position - targetPos)
+    if dir.Magnitude < 0.01 then dir = Vector3.new(0, 0, 1) end
+    local landing = Vector3.new(
+        (targetPos + dir.Unit * rageTPDist).X,
+        targetPos.Y + 2,
+        (targetPos + dir.Unit * rageTPDist).Z
+    )
+
+    pcall(function()
+        root.CFrame = CFrame.new(landing, targetPos)
+        root.AssemblyLinearVelocity = Vector3.zero
+        root.AssemblyAngularVelocity = Vector3.zero
+    end)
+
+    fireRage()
+
+    task.delay(rageTPHold, function()
+        pcall(function()
+            if root then
+                root.CFrame = savedCFrame
+                root.AssemblyLinearVelocity = Vector3.zero
+                root.AssemblyAngularVelocity = Vector3.zero
+            end
+            camera.CFrame = savedCam
+        end)
+    end)
+end
+
+local function rageLoop(dt)
+    if not rageEnabled or not root or not hum or hum.Health <= 0 then return end
+
+    updateBacktrack()
+    applyHitbox()
+    equipRageWeapon()
+
+    local target = scanTargets(rageFOV, rageAimPart, ragePriority, rageVisible, rageTeamCheck)
+    if not target then rageLocked = nil; return end
+
+    if rageLocked ~= target and tick() - rageLastSwitch > 0.1 then
+        rageLocked = target
+        rageLastSwitch = tick()
+    end
+
+    local t = rageLocked or target
+    if not t or not t.Character then return end
+
+    local aimPart = getAimPart(t, rageAimPart)
+    if not aimPart then return end
+
+    if rageTPEnabled then
+        silentTPKill(t)
+    else
+        local targetPos = aimPart.Position
+        if rageBacktrack then
+            local bt = getBacktrackPos(t)
+            if bt then targetPos = bt end
+        end
+        local desired = CFrame.new(camera.CFrame.Position, targetPos)
+        camera.CFrame = desired
+        if root then
+            local look = targetPos - root.Position
+            if look.Magnitude > 0.01 then
+                root.CFrame = CFrame.new(root.Position, root.Position + Vector3.new(look.X, 0, look.Z))
+            end
+        end
+        fireRage()
+    end
+end
+
+function startRage()
+    if rageConn then rageConn:Disconnect() end
+    rageRemoteCache = buildRemoteCache()
+    rageRemoteTime = tick()
+    rageConn = RunService.RenderStepped:Connect(rageLoop)
+end
+function stopRage()
+    if rageConn then rageConn:Disconnect(); rageConn = nil end
+    rageLocked = nil
+    clearHitbox()
+    rageBacktrackCache = {}
+end
+
+-- ============================================================
+-- FOV VISUAL
+-- ============================================================
+
+local function destroyFOV()
+    if fovVisual.circle then fovVisual.circle:Remove(); fovVisual.circle = nil end
+    if fovVisual.fillCircle then fovVisual.fillCircle:Remove(); fovVisual.fillCircle = nil end
+end
+
+local function createFOV()
+    destroyFOV()
+    local outer = Drawing.new("Circle")
+    outer.Thickness = fovVisual.thickness
+    outer.NumSides = fovVisual.sides
+    outer.Radius = silentFOV
+    outer.Filled = false
+    outer.Transparency = fovVisual.transparency
+    outer.Color = fovVisual.color
+    outer.Visible = false
+    fovVisual.circle = outer
+
+    if fovVisual.filled then
+        local inner = Drawing.new("Circle")
+        inner.Thickness = 0
+        inner.NumSides = fovVisual.sides
+        inner.Radius = silentFOV
+        inner.Filled = true
+        inner.Transparency = fovVisual.fillAlpha
+        inner.Color = fovVisual.color
+        inner.Visible = false
+        fovVisual.fillCircle = inner
+    end
+end
+
+local function updateFOV(dt)
+    if not fovVisual.circle then return end
+
+    local shouldShow = fovVisual.enabled and (
+        (silentEnabled and fovVisual.showOnSilent) or
+        (aimbotEnabled and fovVisual.showOnAimbot) or
+        (rageEnabled and fovVisual.showOnRage)
+    )
+
+    if not shouldShow then
+        fovVisual.circle.Visible = false
+        if fovVisual.fillCircle then fovVisual.fillCircle.Visible = false end
+        return
+    end
+
+    local radius = silentFOV
+    if rageEnabled and fovVisual.showOnRage then radius = rageFOV
+    elseif silentEnabled and fovVisual.showOnSilent then radius = silentFOV
+    elseif aimbotEnabled and fovVisual.showOnAimbot then radius = aimbotFOV end
+
+    local center = Vector2.new(camera.ViewportSize.X / 2, camera.ViewportSize.Y / 2)
+
+    if fovVisual.rotate then
+        fovVisual.rotation = fovVisual.rotation + fovVisual.rotationSpeed * dt
+    end
+
+    fovVisual.circle.Position = center
+    fovVisual.circle.Radius = radius
+    fovVisual.circle.Color = fovVisual.color
+    fovVisual.circle.Transparency = fovVisual.transparency
+    fovVisual.circle.Thickness = fovVisual.thickness
+    fovVisual.circle.NumSides = fovVisual.sides
+    fovVisual.circle.Visible = true
+
+    if fovVisual.fillCircle then
+        fovVisual.fillCircle.Position = center
+        fovVisual.fillCircle.Radius = radius
+        fovVisual.fillCircle.Color = fovVisual.color
+        fovVisual.fillCircle.Transparency = fovVisual.fillAlpha
+        fovVisual.fillCircle.NumSides = fovVisual.sides
+        fovVisual.fillCircle.Visible = true
+    end
+end
+
+task.spawn(function()
+    while true do
+        local dt = RunService.RenderStepped:Wait()
+        updateFOV(dt)
+    end
+end)
+
+-- ============================================================
+-- UI
+-- ============================================================
+
+local Tabs = {
+    Combat   = Window:AddTab("Combat"),
+    Rage     = Window:AddTab("Rage"),
+    Visuals  = Window:AddTab("Visuals"),
+    Settings = Window:AddTab("Settings"),
+}
+
+-- ---------- COMBAT TAB ----------
+local CA = Tabs.Combat:AddLeftGroupbox("Silent Aim")
+CA:AddToggle("SilentToggle", {
+    Text = "Enable Silent Aim",
+    Default = false,
+    Callback = function(v)
+        silentEnabled = v
+        if v then startSilent(); Notify("Silent Aim ON", 2)
+        else stopSilent(); Notify("Silent Aim OFF", 2) end
+    end
+}):AddKeyPicker("SilentKey", { Default = "None", Mode = "Toggle", Text = "Silent Aim", SyncToggleState = true, NoUI = false })
+
+CA:AddDropdown("SilentAimPart", {
+    Text = "Aim Part", Default = "Head",
+    Values = {"Head", "UpperTorso", "HumanoidRootPart"},
+    Callback = function(v) silentAimPart = v end
+})
+CA:AddDropdown("SilentPriority", {
+    Text = "Priority", Default = "Closest",
+    Values = {"Closest", "Health", "Distance"},
+    Callback = function(v) silentPriority = v end
+})
+CA:AddSlider("SilentFOV", {
+    Text = "FOV Radius", Default = 200, Min = 10, Max = 800, Rounding = 0,
+    Callback = function(v) silentFOV = v end
+})
+CA:AddSlider("SilentSmoothing", {
+    Text = "Smoothing (%)", Default = 100, Min = 5, Max = 100, Rounding = 0,
+    Callback = function(v) silentSmoothing = v / 100 end
+})
+CA:AddToggle("SilentVisible", { Text = "Visible Check", Default = true, Callback = function(v) silentVisible = v end })
+CA:AddToggle("SilentTeam", { Text = "Team Check", Default = true, Callback = function(v) silentTeamCheck = v end })
+
+local CB = Tabs.Combat:AddRightGroupbox("Aimbot")
+CB:AddToggle("AimbotToggle", {
+    Text = "Enable Aimbot",
+    Default = false,
+    Callback = function(v)
+        aimbotEnabled = v
+        if v then startAimbot(); Notify("Aimbot ON", 2)
+        else stopAimbot(); Notify("Aimbot OFF", 2) end
+    end
+}):AddKeyPicker("AimbotKey", { Default = "None", Mode = "Toggle", Text = "Aimbot", SyncToggleState = true, NoUI = false })
+
+CB:AddToggle("AimbotHold", { Text = "Hold to Aim (RMB)", Default = false, Callback = function(v) aimbotHold = v end })
+CB:AddDropdown("AimbotAimPart", {
+    Text = "Aim Part", Default = "Head",
+    Values = {"Head", "UpperTorso", "HumanoidRootPart"},
+    Callback = function(v) aimbotAimPart = v end
+})
+CB:AddDropdown("AimbotPriority", {
+    Text = "Priority", Default = "Closest",
+    Values = {"Closest", "Health", "Distance"},
+    Callback = function(v) aimbotPriority = v end
+})
+CB:AddSlider("AimbotFOV", {
+    Text = "FOV Radius", Default = 150, Min = 10, Max = 800, Rounding = 0,
+    Callback = function(v) aimbotFOV = v end
+})
+CB:AddSlider("AimbotSmooth", {
+    Text = "Smoothing (%)", Default = 30, Min = 5, Max = 100, Rounding = 0,
+    Callback = function(v) aimbotSmooth = v / 100 end
+})
+CB:AddToggle("AimbotVisible", { Text = "Visible Check", Default = true, Callback = function(v) aimbotVisible = v end })
+CB:AddToggle("AimbotTeam", { Text = "Team Check", Default = true, Callback = function(v) aimbotTeamCheck = v end })
+
+-- ---------- RAGE TAB ----------
+local RA = Tabs.Rage:AddLeftGroupbox("Rage Bot")
+RA:AddLabel("- silent aim + auto fire")
+RA:AddLabel("- TP kill / wallbang / backtrack")
+
+RA:AddToggle("RageToggle", {
+    Text = "Enable Rage Bot",
+    Default = false,
+    Callback = function(v)
+        rageEnabled = v
+        if v then startRage(); Notify("Rage ON", 2)
+        else stopRage(); Notify("Rage OFF", 2) end
+    end
+}):AddKeyPicker("RageKey", { Default = "None", Mode = "Toggle", Text = "Rage", SyncToggleState = true, NoUI = false })
+
+RA:AddDropdown("RageAimPart", {
+    Text = "Aim Part", Default = "Head",
+    Values = {"Head", "UpperTorso", "HumanoidRootPart"},
+    Callback = function(v) rageAimPart = v end
+})
+RA:AddDropdown("RagePriority", {
+    Text = "Priority", Default = "Closest",
+    Values = {"Closest", "Health", "Distance"},
+    Callback = function(v) ragePriority = v end
+})
+RA:AddSlider("RageFOV", {
+    Text = "FOV Radius", Default = 360, Min = 10, Max = 800, Rounding = 0,
+    Callback = function(v) rageFOV = v end
+})
+RA:AddSlider("RageShootDelay", {
+    Text = "Shoot Delay (ms)", Default = 50, Min = 10, Max = 1000, Rounding = 0,
+    Callback = function(v) rageShootDelay = v / 1000 end
+})
+
+RA:AddToggle("RageAutoFire", { Text = "Auto Fire", Default = true, Callback = function(v) rageAutoFire = v end })
+RA:AddToggle("RageWallbang", { Text = "Wallbang (skip visible check)", Default = true,
+    Callback = function(v) rageVisible = not v end
+})
+RA:AddToggle("RageTeam", { Text = "Team Check", Default = true, Callback = function(v) rageTeamCheck = v end })
+
+RA:AddToggle("RageTP", { Text = "Silent Teleport Kill", Default = false, Callback = function(v) rageTPEnabled = v end })
+RA:AddSlider("RageTPDist", {
+    Text = "TP Distance", Default = 4, Min = 1, Max = 20, Rounding = 0,
+    Callback = function(v) rageTPDist = v end
+})
+RA:AddSlider("RageTPHold", {
+    Text = "Server Hold (ms)", Default = 80, Min = 10, Max = 500, Rounding = 0,
+    Callback = function(v) rageTPHold = v / 1000 end
+})
+
+RA:AddToggle("RageHitbox", {
+    Text = "Hitbox Expander", Default = false,
+    Callback = function(v) rageHitbox = v; if not v then clearHitbox() end end
+})
+RA:AddSlider("RageHitboxSize", {
+    Text = "Hitbox Size", Default = 15, Min = 5, Max = 50, Rounding = 0,
+    Callback = function(v) rageHitboxSize = v end
+})
+
+RA:AddToggle("RageBacktrack", { Text = "Backtrack", Default = false, Callback = function(v) rageBacktrack = v end })
+RA:AddSlider("RageBacktrackTime", {
+    Text = "Backtrack Time (ms)", Default = 150, Min = 50, Max = 300, Rounding = 0,
+    Callback = function(v) rageBacktrackT = v / 1000 end
+})
+
+RA:AddDropdown("RageWeaponType", {
+    Text = "Weapon Slot", Default = "Primary",
+    Values = {"Primary", "Secondary", "Melee"},
+    Callback = function(v) rageWeaponType = v end
+})
+RA:AddDropdown("RagePrimary", { Text = "Primary", Default = "Auto", Values = {"Auto"}, Callback = function(v) ragePrimaryW = v end })
+RA:AddDropdown("RageSecondary", { Text = "Secondary", Default = "Auto", Values = {"Auto"}, Callback = function(v) rageSecondaryW = v end })
+RA:AddDropdown("RageMelee", { Text = "Melee", Default = "Auto", Values = {"Auto"}, Callback = function(v) rageMeleeW = v end })
+
+local RB = Tabs.Rage:AddRightGroupbox("Info")
+RB:AddLabel("- TP Kill = server sees you, you don't")
+RB:AddLabel("- wallbang = no LOS needed")
+RB:AddLabel("- backtrack = aims where they were")
+RB:AddLabel("- hitbox = truck-sized HRP")
+RB:AddLabel("- 'Both' fires tool + remotes")
+
+task.spawn(function()
+    while task.wait(2) do
+        pcall(function()
+            local list = {"Auto"}
+            for _, n in ipairs(getAllTools()) do table.insert(list, n) end
+            if Options.RagePrimary   then Options.RagePrimary:SetValues(list)   end
+            if Options.RageSecondary then Options.RageSecondary:SetValues(list) end
+            if Options.RageMelee     then Options.RageMelee:SetValues(list)     end
+        end)
+    end
+end)
+
+-- ---------- VISUALS TAB ----------
+local VA = Tabs.Visuals:AddLeftGroupbox("FOV Visual")
+VA:AddToggle("FOVToggle", { Text = "Show FOV Circle", Default = true, Callback = function(v) fovVisual.enabled = v end })
+VA:AddToggle("FOVFilled", {
+    Text = "Filled", Default = false,
+    Callback = function(v) fovVisual.filled = v; createFOV() end
+})
+VA:AddToggle("FOVRotate", { Text = "Rotate", Default = false, Callback = function(v) fovVisual.rotate = v end })
+VA:AddSlider("FOVRotSpeed", {
+    Text = "Rotation Speed", Default = 30, Min = 5, Max = 200, Rounding = 0,
+    Callback = function(v) fovVisual.rotationSpeed = v end
+})
+VA:AddSlider("FOVTransparency", {
+    Text = "Transparency (%)", Default = 70, Min = 0, Max = 100, Rounding = 0,
+    Callback = function(v) fovVisual.transparency = v / 100 end
+})
+VA:AddSlider("FOVFillAlpha", {
+    Text = "Fill Opacity (%)", Default = 20, Min = 0, Max = 100, Rounding = 0,
+    Callback = function(v) fovVisual.fillAlpha = v / 100; createFOV() end
+})
+VA:AddSlider("FOVThickness", {
+    Text = "Thickness", Default = 1, Min = 1, Max = 10, Rounding = 0,
+    Callback = function(v) fovVisual.thickness = v end
+})
+VA:AddSlider("FOVSides", {
+    Text = "Circle Sides", Default = 80, Min = 10, Max = 200, Rounding = 0,
+    Callback = function(v) fovVisual.sides = v; createFOV() end
+})
+VA:AddColorPicker("FOVColor", {
+    Text = "Circle Color", Default = Color3.fromRGB(255, 60, 60),
+    Callback = function(c) fovVisual.color = c end
+})
+
+local VB = Tabs.Visuals:AddRightGroupbox("Display Rules")
+VB:AddLabel("- pick which FOV to show")
+VB:AddToggle("FOVShowSilent", { Text = "Show on Silent", Default = true, Callback = function(v) fovVisual.showOnSilent = v end })
+VB:AddToggle("FOVShowAimbot", { Text = "Show on Aimbot", Default = true, Callback = function(v) fovVisual.showOnAimbot = v end })
+VB:AddToggle("FOVShowRage",   { Text = "Show on Rage", Default = true, Callback = function(v) fovVisual.showOnRage = v end })
+VB:AddLabel("- rage > silent > aimbot priority")
+VB:AddLabel("- rotate for tuff spin")
+
+-- ---------- SETTINGS TAB ----------
+local Menu = Tabs.Settings:AddLeftGroupbox("Menu")
+Menu:AddToggle("KeybindMenu", {
+    Text = "Keybind Menu", Default = false,
+    Callback = function(v) pcall(function() if Library.KeybindFrame then Library.KeybindFrame.Visible = v end end) end
+})
+
+local UI = Tabs.Settings:AddLeftGroupbox("UI")
+UI:AddLabel("Menu Keybind"):AddKeyPicker("MenuKeybind", {
+    Default = "RightShift", Text = "Menu Keybind", Mode = "Toggle", NoUI = false
+})
+Library.ToggleKeybind = Options.MenuKeybind
+
+UI:AddButton("Unload Script", function()
+    stopSilent(); stopAimbot(); stopRage(); destroyFOV()
+    Library:Unload()
+end)
+
+local ThemeManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/deividcomsono/Obsidian/main/addons/ThemeManager.lua"))()
+local SaveManager  = loadstring(game:HttpGet("https://raw.githubusercontent.com/deividcomsono/Obsidian/main/addons/SaveManager.lua"))()
+ThemeManager:SetLibrary(Library)
+SaveManager:SetLibrary(Library)
+SaveManager:IgnoreThemeSettings()
+SaveManager:SetIgnoreIndexes({"MenuKeybind"})
+ThemeManager:SetFolder("Rivals")
+SaveManager:SetFolder("Rivals/configs")
+SaveManager:BuildConfigSection(Tabs.Settings)
+ThemeManager:ApplyToTab(Tabs.Settings)
+
+createFOV()
+
+Library:Notify({ Title = "Rivals", Description = "loaded. build 2.0 by Enzo.", Time = 4 })
