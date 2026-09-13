@@ -1,0 +1,912 @@
+-- ============================================================
+-- RAGEBOT FOR LINORIA UI
+-- Paste this AFTER your UI Settings tab is created
+-- ============================================================
+
+local Players           = game:GetService("Players")
+local RunService        = game:GetService("RunService")
+local UserInputService  = game:GetService("UserInputService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Workspace         = game:GetService("Workspace")
+
+local LocalPlayer = Players.LocalPlayer
+local Camera      = workspace.CurrentCamera
+
+-- Make sure a Ragebot tab exists
+local RagebotTab = Window:AddTab("Ragebot")
+
+-- ============================================================
+-- CONFIG / STATE
+-- ============================================================
+local config = {
+    target = {
+        enabled = false,
+        character = nil,
+        auto = false,
+        autoshoot = true,
+        shootAttempts = 1,
+        hitpart = "Head",
+        lastchar = nil,
+        lastplayer = nil,
+        manualkey = false,
+        immune = false,
+        attackPosition = "default",
+        attackCustomEnabled = false,
+        weaponPick = "primary",
+        rageMasterOn = false,
+        rightClickKnife = false,
+        meleeFeetDrop = 3.5,
+        underOffset = 4,
+        customHeight = 2,
+        customFront = 0,
+        customSide = 0,
+        customVertical = 0,
+        customRadius = 0,
+        targetSort = "nearest",
+        teamCheck = true,
+        wallCheck = false,
+        maxDistance = 0,
+        autoSwitch = true,
+        safeHP = 0,
+    },
+    prediction = {
+        enabled = false,
+        multiplier = 1.2,
+        velocity = Vector3.new(0, 0, 0),
+        lastposition = nil,
+        lasttime = 0,
+    },
+    orbit = {
+        active = false,
+        angle = 0,
+        serverpos = nil,
+        connection = nil,
+        speed = 9000,
+        orbitSpeed = 9000,
+        height = 1,
+        radius = 0,
+        originalpos = nil,
+    },
+    state = {
+        reloading = false,
+        outofammo = false,
+        csyncactive = false,
+        reloadStartedAt = 0,
+    },
+    voidspam = {
+        enabled = false,
+        shoot_min = 1,
+        shoot_max = 1,
+        hide_min = 1,
+        hide_max = 1,
+        phase = nil,
+        lastswitch = 0,
+        currentduration = 0,
+        bypassMode = "Extreme Networking",
+    },
+    backstab = {
+        enabled = false,
+        camera = false,
+    },
+    ragestatus = {
+        enabled = false,
+        mode = "static",
+        color = Color3.fromRGB(235, 235, 235),
+        staticOffsetX = 0,
+        staticOffsetY = 40,
+        showAmmo = true,
+        hideOnReload = true,
+        textSize = 15,
+        lineGap = 15,
+        showKills = true,
+    },
+    kills = {
+        count = 0,
+        streak = 0,
+        lastKillAt = 0,
+    },
+}
+
+local ragePerf = {
+    lastAttackTick = 0,
+    hitPartByPlayer = {},
+    lastHitAtByPlayer = {},
+    delayActive = false,
+    delayTask = nil,
+    shootCooldown = 0,
+    shootReadyAt = nil,
+    canShoot = false,
+    shootDelay = 0.3,
+}
+
+local vhState = { active = false }
+
+-- Utility clamp
+local function clampVs(v)
+    return math.clamp(tonumber(v) or 1, 0.1, 2)
+end
+
+local function randVs(minT, maxT)
+    local a, b = clampVs(minT), clampVs(maxT)
+    if b < a then a, b = b, a end
+    if a == b then return a end
+    return a + math.random() * (b - a)
+end
+
+-- ============================================================
+-- MODULE REQUIREMENTS
+-- ============================================================
+local modules = {}
+pcall(function()
+    modules.enums   = require(ReplicatedStorage.Modules.EnumLibrary)
+    modules.fighter = require(LocalPlayer.PlayerScripts.Controllers.FighterController)
+    modules.camcontrol = require(LocalPlayer.PlayerScripts.Controllers.CameraController)
+    modules.utility = require(ReplicatedStorage.Modules.Utility)
+end)
+local localfighter = modules.fighter and modules.fighter.LocalFighter
+
+-- ============================================================
+-- MATCH / LOBBY DETECTION
+-- ============================================================
+local _lobbyCache = { t = 0, v = true }
+local function liveMatch()
+    local char = LocalPlayer.Character
+    if not char then return false end
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if not hum or hum.Health <= 0 then return false end
+    if modules.fighter and modules.fighter.LocalFighter and modules.fighter.LocalFighter.Entity then
+        return true
+    end
+    local myTeam = LocalPlayer:GetAttribute("TeamID")
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= LocalPlayer and p.Character then
+            local h = p.Character:FindFirstChildOfClass("Humanoid")
+            if h and h.Health > 0 and myTeam ~= nil and p:GetAttribute("TeamID") ~= myTeam then
+                return true
+            end
+        end
+    end
+    return false
+end
+local function lobbyCache()
+    local now = os.clock()
+    if now - _lobbyCache.t < 0.15 then return _lobbyCache.v end
+    _lobbyCache.t = now
+    _lobbyCache.v = not liveMatch()
+    return _lobbyCache.v
+end
+
+-- ============================================================
+-- HELPERS
+-- ============================================================
+local SLOTS = { primary = 1, secondary = 2, melee = 3 }
+local MELEE_NMS = {
+    ["Battle Axe"]=true, ["Chainsaw"]=true, ["Daggers"]=true, ["Fists"]=true,
+    ["Gunblade"]=true, ["Katana"]=true, ["Knife"]=true, ["Scythe"]=true, ["Trowel"]=true,
+}
+local INFINITE_AMMO_WEAPONS = { ["Energy Rifle"]=true, ["Energy Pistols"]=true }
+
+local function getweapon()
+    local vm = workspace:FindFirstChild("ViewModels")
+    local fp = vm and vm:FindFirstChild("FirstPerson")
+    if not fp then return nil end
+    for _, child in ipairs(fp:GetChildren()) do
+        local parts = {}
+        for part in child.Name:gmatch("[^-]+") do
+            table.insert(parts, part:match("^%s*(.-)%s*$"))
+        end
+        if #parts >= 2 then return parts[2] end
+    end
+    return nil
+end
+
+local function isInfiniteWeapon()
+    local w = getweapon()
+    return w and INFINITE_AMMO_WEAPONS[w] == true
+end
+
+local function isSling(weapon)
+    return weapon and weapon:lower():find("slingshot", 1, true) ~= nil
+end
+
+local function wantSlot()
+    return SLOTS[config.target.weaponPick or "primary"] or 1
+end
+
+local function pickMelee()
+    return (config.target.weaponPick or "primary") == "melee"
+end
+
+local function isteammate(targetplayer)
+    if not targetplayer then return false end
+    return LocalPlayer:GetAttribute("TeamID") == targetplayer:GetAttribute("TeamID")
+end
+
+local function valid(char)
+    if not char or not char.Parent then return false end
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if not hum or hum.Health <= 0 then return false end
+    if not char:FindFirstChild("HumanoidRootPart") then return false end
+    local tp = Players:GetPlayerFromCharacter(char)
+    if not tp then return false end
+    if config.target.teamCheck and isteammate(tp) then return false end
+    return true
+end
+
+local function hitpartfromname(character, partname)
+    if not character then return nil end
+    if partname == "Closest" then
+        local myRoot = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+        if not myRoot then return character:FindFirstChild("Head") end
+        local closest, dist = nil, math.huge
+        for _, part in pairs(character:GetChildren()) do
+            if part:IsA("BasePart") then
+                local d = (part.Position - myRoot.Position).Magnitude
+                if d < dist then dist = d; closest = part end
+            end
+        end
+        return closest or character:FindFirstChild("Head")
+    elseif partname == "Random" then
+        local parts = {"Head", "HumanoidRootPart", "UpperTorso"}
+        return character:FindFirstChild(parts[math.random(#parts)]) or character:FindFirstChild("Head")
+    end
+    return character:FindFirstChild(partname) or character:FindFirstChild("Head")
+end
+
+local function getammo()
+    if isInfiniteWeapon() then return nil, nil, false end
+    local lf = modules.fighter and modules.fighter.LocalFighter
+    if lf and lf.EquippedItem then
+        local item = lf.EquippedItem
+        local ok, current, maxAmmo = pcall(function()
+            return item:Get("CurrentAmmo") or item:Get("Ammo") or 0,
+                   item:Get("MaxAmmo") or item:Get("MaxBullets") or 0
+        end)
+        if ok then
+            return tonumber(current) or 0, tonumber(maxAmmo) or 0, pickMelee()
+        end
+    end
+    return 0, 0, pickMelee()
+end
+
+local function canuse()
+    local char = LocalPlayer.Character
+    if not char then return false end
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if not hum or hum.Health <= 0 then return false end
+    if config.target.safeHP > 0 and hum.Health < config.target.safeHP then return false end
+    if isInfiniteWeapon() then return true end
+    local current, _, melee = getammo()
+    if current == nil then return true end
+    return current > 0 or melee
+end
+
+-- ============================================================
+-- TARGET SELECTION
+-- ============================================================
+local function nearest()
+    local sortMode = config.target.targetSort or "nearest"
+    local myRoot = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+    local myPos = myRoot and myRoot.Position or Vector3.zero
+    local candidates = {}
+    for _, tp in ipairs(Players:GetPlayers()) do
+        if tp ~= LocalPlayer and not (config.target.teamCheck and isteammate(tp)) then
+            local char = tp.Character
+            if valid(char) then
+                local root = char:FindFirstChild("HumanoidRootPart")
+                if root then
+                    local dist = (root.Position - myPos).Magnitude
+                    if config.target.maxDistance <= 0 or dist <= config.target.maxDistance then
+                        local hum = char:FindFirstChildOfClass("Humanoid")
+                        table.insert(candidates, {char=char, root=root, dist=dist, hp=hum and hum.Health or 0})
+                    end
+                end
+            end
+        end
+    end
+    if #candidates == 0 then return nil end
+    if sortMode == "farthest" then
+        local best
+        for _, c in ipairs(candidates) do if not best or c.dist > best.dist then best = c end end
+        return best and best.char
+    elseif sortMode == "lowest hp" then
+        local best
+        for _, c in ipairs(candidates) do if not best or c.hp < best.hp then best = c end end
+        return best and best.char
+    elseif sortMode == "highest hp" then
+        local best
+        for _, c in ipairs(candidates) do if not best or c.hp > best.hp then best = c end end
+        return best and best.char
+    elseif sortMode == "closest to cursor" then
+        local cursor = UserInputService:GetMouseLocation()
+        local best, bestdist = nil, math.huge
+        for _, c in ipairs(candidates) do
+            local sp, on = Camera:WorldToViewportPoint(c.root.Position)
+            if on then
+                local d = (Vector2.new(sp.X, sp.Y) - cursor).Magnitude
+                if d < bestdist then bestdist = d; best = c end
+            end
+        end
+        return best and best.char
+    elseif sortMode == "random" then
+        return candidates[math.random(1, #candidates)].char
+    else
+        local best, bestdist = nil, math.huge
+        for _, c in ipairs(candidates) do
+            if c.dist < bestdist then bestdist = c.dist; best = c end
+        end
+        return best and best.char
+    end
+end
+
+local function settarget(char)
+    if not char then return end
+    local tp = Players:GetPlayerFromCharacter(char)
+    config.target.enabled = true
+    config.target.character = char
+    config.target.lastchar = char
+    config.target.lastplayer = tp
+    config.target.immune = false
+    ragePerf.canShoot = false
+    if ragePerf.delayTask then task.cancel(ragePerf.delayTask) end
+    ragePerf.delayActive = true
+    ragePerf.delayTask = task.spawn(function()
+        task.wait(ragePerf.shootDelay)
+        if not config.target.enabled or config.target.character ~= char then return end
+        ragePerf.delayActive = false
+        ragePerf.shootReadyAt = tick() + ragePerf.shootCooldown
+        ragePerf.canShoot = true
+    end)
+end
+
+local function cleartarget()
+    config.target.enabled = false
+    config.target.character = nil
+    config.target.lastchar = nil
+    config.target.lastplayer = nil
+    config.target.immune = false
+    if ragePerf.delayTask then task.cancel(ragePerf.delayTask); ragePerf.delayTask = nil end
+    ragePerf.delayActive = false
+    ragePerf.canShoot = false
+    if config.orbit.connection then config.orbit.connection:Disconnect(); config.orbit.connection = nil end
+    config.state.csyncactive = false
+    config.orbit.active = false
+end
+
+-- ============================================================
+-- PREDICTION
+-- ============================================================
+local function updatevel()
+    if not config.target.character or not config.prediction.enabled then
+        config.prediction.velocity = Vector3.new(0,0,0)
+        config.prediction.lastposition = nil
+        return
+    end
+    local root = config.target.character:FindFirstChild("HumanoidRootPart")
+    if not root then return end
+    local now = tick()
+    local dt = now - config.prediction.lasttime
+    if dt > 0 and dt < 0.1 then
+        local currentpos = root.Position
+        if config.prediction.lastposition then
+            local instantvel = (currentpos - config.prediction.lastposition) / dt
+            config.prediction.velocity = config.prediction.velocity:Lerp(instantvel, 0.6)
+        end
+        config.prediction.lastposition = currentpos
+        config.prediction.lasttime = now
+    end
+end
+
+local function predict(targetpart, origin)
+    if not config.prediction.enabled or not targetpart then
+        return targetpart and targetpart.Position or Vector3.new()
+    end
+    local basepos = targetpart.Position
+    local distance = (basepos - origin).Magnitude
+    local ping = 0
+    pcall(function()
+        ping = game:GetService("Stats").Network.ServerStatsItem["Data Ping"]:GetValue() / 1000
+    end)
+    local traveltime = distance / 3000
+    local totaltime = (traveltime + ping) * config.prediction.multiplier
+    return basepos + (config.prediction.velocity * totaltime)
+end
+
+-- ============================================================
+-- ATTACK POSITION
+-- ============================================================
+local function atkCfg()
+    if pickMelee() and not config.target.attackCustomEnabled then
+        local drop = tonumber(config.target.meleeFeetDrop) or 3.5
+        return { height = 0, front = 0, side = 0, vertical = -drop, radius = 0 }
+    end
+    if config.target.attackCustomEnabled then
+        return {
+            height = config.target.customHeight or 2,
+            front = config.target.customFront or 0,
+            side = config.target.customSide or 0,
+            vertical = config.target.customVertical or 0,
+            radius = config.target.customRadius or 0,
+        }
+    end
+    local mode = config.target.attackPosition or "default"
+    local weapon = getweapon()
+    if mode == "under" then
+        return { height = 0, front = 0, side = 0, vertical = -(config.target.underOffset or 4), radius = 0 }
+    end
+    return {
+        height = (weapon and weapon:lower():find("sniper")) and 8 or 2,
+        front = 0, side = 0, vertical = 0, radius = 0,
+    }
+end
+
+local function orbBase(root)
+    if not root then return Vector3.zero end
+    local s = atkCfg()
+    local pos = root.Position
+    local look = root.CFrame.LookVector
+    local right = root.CFrame.RightVector
+    return pos + (look * s.front) + (right * s.side) + Vector3.new(0, s.vertical, 0)
+end
+
+-- ============================================================
+-- EQUIP SLOT / SHOOTING
+-- ============================================================
+local rageLastSlotForce = 0
+local function pressSlot(slotIdx)
+    pcall(function()
+        local vim = game:GetService("VirtualInputManager")
+        local kc = ({ Enum.KeyCode.One, Enum.KeyCode.Two, Enum.KeyCode.Three })[slotIdx]
+        if not kc then return end
+        vim:SendKeyEvent(true, kc, false, game)
+        task.wait(0.02)
+        vim:SendKeyEvent(false, kc, false, game)
+    end)
+end
+
+local function eqSlot()
+    if not config.target.enabled then return end
+    local want = wantSlot()
+    local lf = modules.fighter and modules.fighter.LocalFighter
+    if not lf then return end
+    local eq = lf.EquippedItem
+    if eq then
+        local oid = eq:Get("ObjectID")
+        local items = lf.Items
+        if items then
+            local cur = nil
+            for idx = 1, 3 do
+                local it = items[idx] or items[tostring(idx)]
+                if it and it:Get("ObjectID") == oid then cur = idx break end
+            end
+            if cur == want then return end
+        end
+    end
+    local now = tick()
+    if now - rageLastSlotForce < 0.06 then return end
+    rageLastSlotForce = now
+    pressSlot(want)
+end
+
+local function autoshoot()
+    if not config.target.enabled or not config.target.character or not config.target.autoshoot then return end
+    if config.target.immune then return end
+    if not ragePerf.canShoot then return end
+    if ragePerf.shootReadyAt and tick() < ragePerf.shootReadyAt then return end
+    if config.voidspam.enabled and config.voidspam.phase == "hide" then return end
+    if not isInfiniteWeapon() then
+        if config.state.reloading or config.state.outofammo then return end
+        if not canuse() then return end
+    end
+    eqSlot()
+    local lf = modules.fighter and modules.fighter.LocalFighter
+    if not lf or not lf.EquippedItem then return end
+    local targetChar = config.target.character
+    if not valid(targetChar) then return end
+    local hitPart = hitpartfromname(targetChar, config.target.hitpart)
+    if not hitPart then return end
+    local myRoot = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+    local shootPos = myRoot and myRoot.Position or Vector3.new()
+    local targetPos = predict(hitPart, shootPos)
+    local data = {
+        [utf8.char(1)] = {
+            [utf8.char(0)] = modules.utility:EncodeCFrame(CFrame.new(shootPos, targetPos)),
+            [utf8.char(1)] = modules.utility:EncodeCFrame(CFrame.new(shootPos, targetPos)),
+            [utf8.char(2)] = hitPart,
+            [utf8.char(3)] = modules.utility:EncodeCFrame(CFrame.new(0.43, 0.25, 0.42)),
+        },
+    }
+    local equipped = lf.EquippedItem
+    if equipped and equipped:Get("ObjectID") then
+        ragePerf.lastAttackTick = tick()
+        for _ = 1, math.floor(config.target.shootAttempts or 1) do
+            pcall(function()
+                ReplicatedStorage.Remotes.Replication.Fighter.UseItem:FireServer(
+                    equipped:Get("ObjectID"),
+                    modules.enums:ToEnum("StartShooting"),
+                    data,
+                    nil
+                )
+            end)
+        end
+    end
+end
+
+-- ============================================================
+-- AMMO TICK
+-- ============================================================
+local function tickAmmo()
+    if isInfiniteWeapon() then
+        config.state.outofammo = false
+        config.state.reloading = false
+        return
+    end
+    local current, _, melee = getammo()
+    config.state.outofammo = (not melee) and (tonumber(current) or 0) <= 0
+end
+
+-- ============================================================
+-- BACKSTAB HOOK
+-- ============================================================
+local backstabOriginalFuncs = {}
+local function startBackstab()
+    pcall(function()
+        local knife = require(LocalPlayer.PlayerScripts.Modules.ItemTypes.Knife)
+            or require(LocalPlayer.PlayerScripts.Modules.ItemTypes.Melee)
+        if knife then
+            for _, fname in ipairs({"IsBackstab", "CheckBackstab", "GetHitType", "CanBackstab"}) do
+                if rawget(knife, fname) and type(knife[fname]) == "function" then
+                    local old = knife[fname]
+                    backstabOriginalFuncs[fname] = old
+                    knife[fname] = function(...)
+                        if config.backstab.enabled then return true end
+                        return old(...)
+                    end
+                    break
+                end
+            end
+        end
+    end)
+end
+
+local function stopBackstab()
+    for fname, oldFunc in pairs(backstabOriginalFuncs) do
+        pcall(function()
+            local knife = require(LocalPlayer.PlayerScripts.Modules.ItemTypes.Knife)
+                or require(LocalPlayer.PlayerScripts.Modules.ItemTypes.Melee)
+            if knife and rawget(knife, fname) then knife[fname] = oldFunc end
+        end)
+    end
+    backstabOriginalFuncs = {}
+end
+
+-- ============================================================
+-- MAIN LOOPS
+-- ============================================================
+RunService.Heartbeat:Connect(function()
+    pcall(tickAmmo)
+    -- Auto target
+    if config.target.auto then
+        local myChar = LocalPlayer.Character
+        local myHum = myChar and myChar:FindFirstChildOfClass("Humanoid")
+        if config.target.safeHP > 0 and myHum and myHum.Health < config.target.safeHP then
+            if config.target.enabled then cleartarget() end
+            return
+        end
+        local current, _, melee = getammo()
+        local hasammo = current == nil or current > 0 or melee
+        if hasammo and not config.state.reloading then
+            if not config.target.enabled or not config.target.character or not valid(config.target.character) then
+                local newtarget = nearest()
+                if newtarget then settarget(newtarget) end
+            end
+        end
+    end
+    -- Target maintenance
+    if config.target.enabled and config.target.character then
+        if not valid(config.target.character) then
+            if config.target.autoSwitch then
+                local newtarget = nearest()
+                if newtarget then cleartarget(); settarget(newtarget); return end
+            end
+            cleartarget()
+            return
+        end
+        if not ragePerf.delayActive then eqSlot() end
+        if config.target.autoshoot and not config.target.immune then autoshoot() end
+    end
+end)
+
+RunService.RenderStepped:Connect(function()
+    if config.target.enabled and config.target.character and config.prediction.enabled then
+        updatevel()
+    end
+end)
+
+-- ============================================================
+-- UI: RAGEBOT TAB
+-- ============================================================
+local Ragebox = RagebotTab:AddLeftTabbox("ragebot")
+local MainTab    = Ragebox:AddTab("ragebot")
+local VisualTab  = Ragebox:AddTab("visualizer")
+
+-- ---- MAIN ----
+MainTab:AddToggle("RG_Enable", {
+    Text = "enable",
+    Default = false,
+    Callback = function(val)
+        config.target.rageMasterOn = val
+        if config.target.auto then return end
+        if val then
+            local target = nearest()
+            if target then settarget(target) end
+        else
+            cleartarget()
+        end
+    end,
+}):AddKeyPicker("RG_Key", {
+    Text = "ragebot",
+    Default = "None",
+    Mode = "Toggle",
+    Callback = function(state)
+        if config.target.auto then return end
+        if state then
+            local target = nearest()
+            if target then settarget(target) end
+        else
+            cleartarget()
+        end
+    end,
+})
+
+MainTab:AddToggle("RG_AutoTarget", {
+    Text = "auto target",
+    Default = false,
+    Callback = function(val) config.target.auto = val end,
+})
+
+MainTab:AddToggle("RG_RightClickKnife", {
+    Text = "right click knife",
+    Default = false,
+    Callback = function(val) config.target.rightClickKnife = val end,
+})
+
+MainTab:AddSlider("RG_TargetDelay", {
+    Text = "target delay",
+    Default = 0.3, Min = 0, Max = 2.5, Rounding = 2, Suffix = "s",
+    Callback = function(val) ragePerf.shootDelay = val end,
+})
+
+MainTab:AddSlider("RG_ShootCooldown", {
+    Text = "delay shoot",
+    Default = 0, Min = 0, Max = 2.5, Rounding = 2, Suffix = "s",
+    Callback = function(val) ragePerf.shootCooldown = val end,
+})
+
+MainTab:AddDropdown("RG_WeaponPick", {
+    Text = "weapon",
+    Default = "primary",
+    Values = { "primary", "secondary", "melee" },
+    Callback = function(val) config.target.weaponPick = val end,
+})
+
+MainTab:AddDropdown("RG_AttackPos", {
+    Text = "attack position",
+    Default = "default",
+    Values = { "default", "under" },
+    Callback = function(val) config.target.attackPosition = val end,
+})
+
+MainTab:AddSlider("RG_UnderOffset", {
+    Text = "under offset",
+    Default = 4, Min = 1, Max = 25, Rounding = 1,
+    Callback = function(val) config.target.underOffset = val end,
+})
+
+MainTab:AddSlider("RG_ShootAttempts", {
+    Text = "shoot attempts",
+    Default = 1, Min = 1, Max = 20, Rounding = 0, Suffix = "x",
+    Callback = function(val) config.target.shootAttempts = math.floor(val) end,
+})
+
+MainTab:AddDropdown("RG_HitPart", {
+    Text = "hit part",
+    Default = "Head",
+    Values = { "Head", "HumanoidRootPart", "Torso", "UpperTorso", "Closest", "Random" },
+    Callback = function(val) config.target.hitpart = val end,
+})
+
+MainTab:AddDropdown("RG_TargetSort", {
+    Text = "target sort",
+    Default = "nearest",
+    Values = { "nearest", "farthest", "lowest hp", "highest hp", "closest to cursor", "random" },
+    Callback = function(val) config.target.targetSort = val end,
+})
+
+MainTab:AddToggle("RG_TeamCheck", {
+    Text = "team check",
+    Default = true,
+    Callback = function(val) config.target.teamCheck = val end,
+})
+
+MainTab:AddToggle("RG_WallCheck", {
+    Text = "wall check",
+    Default = false,
+    Callback = function(val) config.target.wallCheck = val end,
+})
+
+MainTab:AddSlider("RG_MaxDistance", {
+    Text = "max distance",
+    Default = 0, Min = 0, Max = 5000, Rounding = 0, Suffix = " studs", Compact = true,
+    Callback = function(val) config.target.maxDistance = val end,
+})
+
+MainTab:AddSlider("RG_SafeHP", {
+    Text = "safe hp",
+    Default = 0, Min = 0, Max = 100, Rounding = 0, Suffix = " hp", Compact = true,
+    Callback = function(val) config.target.safeHP = val end,
+})
+
+MainTab:AddToggle("RG_AutoSwitch", {
+    Text = "auto switch target",
+    Default = true,
+    Callback = function(val) config.target.autoSwitch = val end,
+})
+
+MainTab:AddToggle("RG_Predict", {
+    Text = "prediction",
+    Default = false,
+    Callback = function(val) config.prediction.enabled = val end,
+})
+
+MainTab:AddSlider("RG_PredictMul", {
+    Text = "prediction mult",
+    Default = 1.2, Min = 0.1, Max = 3.0, Rounding = 1,
+    Callback = function(val) config.prediction.multiplier = val end,
+})
+
+MainTab:AddToggle("RG_VoidSpam", {
+    Text = "voidspam",
+    Default = false,
+    Callback = function(val)
+        config.voidspam.enabled = val
+        if not val then config.voidspam.phase = nil end
+    end,
+})
+
+MainTab:AddSlider("RG_VoidShootTime", {
+    Text = "attack", Default = 1, Min = 0.1, Max = 2, Rounding = 1, Compact = true,
+    Callback = function(val) val = clampVs(val); config.voidspam.shoot_min = val; config.voidspam.shoot_max = val end,
+})
+
+MainTab:AddSlider("RG_VoidHideTime", {
+    Text = "hide", Default = 1, Min = 0.1, Max = 2, Rounding = 1, Compact = true,
+    Callback = function(val) val = clampVs(val); config.voidspam.hide_min = val; config.voidspam.hide_max = val end,
+})
+
+MainTab:AddDropdown("RG_VoidBypass", {
+    Text = "void bypass",
+    Default = "Extreme Networking",
+    Values = { "None", "Velocity", "CFrame only", "Hybrid", "Physics Bypass", "Extreme Networking" },
+    Callback = function(val) config.voidspam.bypassMode = val end,
+})
+
+MainTab:AddSlider("RG_OrbitSpeed", {
+    Text = "orbit speed", Default = 9000, Min = 100, Max = 50000, Rounding = 0, Compact = true,
+    Callback = function(val) config.orbit.orbitSpeed = val; config.orbit.speed = val end,
+})
+
+MainTab:AddToggle("RG_ShowKills", {
+    Text = "show kills",
+    Default = true,
+    Callback = function(val) config.ragestatus.showKills = val end,
+})
+
+MainTab:AddToggle("RG_Backstab", {
+    Text = "always backstab",
+    Default = false,
+    Callback = function(val)
+        config.backstab.enabled = val
+        if val then startBackstab() else stopBackstab() end
+    end,
+})
+
+-- ---- VISUALIZER ----
+VisualTab:AddToggle("RG_RageStatus", {
+    Text = "rage status",
+    Default = false,
+    Callback = function(val) config.ragestatus.enabled = val end,
+}):AddColorPicker("RG_RageStatusColor", {
+    Title = "text color",
+    Default = config.ragestatus.color,
+    Callback = function(val) config.ragestatus.color = val end,
+})
+
+VisualTab:AddDropdown("RG_RageStatusMode", {
+    Text = "position",
+    Default = "static",
+    Values = { "static", "muzzle" },
+    Callback = function(val) config.ragestatus.mode = val end,
+})
+
+VisualTab:AddSlider("RG_RageStatusX", {
+    Text = "static x", Default = 0, Min = -500, Max = 500, Rounding = 0, Compact = true,
+    Callback = function(val) config.ragestatus.staticOffsetX = val end,
+})
+
+VisualTab:AddSlider("RG_RageStatusY", {
+    Text = "static y", Default = 40, Min = -500, Max = 500, Rounding = 0, Compact = true,
+    Callback = function(val) config.ragestatus.staticOffsetY = val end,
+})
+
+VisualTab:AddSlider("RG_RageStatusTextSize", {
+    Text = "text size", Default = 15, Min = 10, Max = 30, Rounding = 0, Compact = true,
+    Callback = function(val) config.ragestatus.textSize = val end,
+})
+
+VisualTab:AddSlider("RG_RageStatusLineGap", {
+    Text = "line gap", Default = 15, Min = 5, Max = 40, Rounding = 0, Compact = true,
+    Callback = function(val) config.ragestatus.lineGap = val end,
+})
+
+-- ============================================================
+-- RAGE STATUS DRAWING
+-- ============================================================
+local statusLine1 = Drawing.new("Text")
+statusLine1.Size = 15; statusLine1.Font = 2; statusLine1.Outline = true; statusLine1.Center = true; statusLine1.Visible = false
+statusLine1.Color = config.ragestatus.color; statusLine1.OutlineColor = Color3.new(0,0,0)
+
+local statusLine2 = Drawing.new("Text")
+statusLine2.Size = 15; statusLine2.Font = 2; statusLine2.Outline = true; statusLine2.Center = true; statusLine2.Visible = false
+statusLine2.Color = config.ragestatus.color; statusLine2.OutlineColor = Color3.new(0,0,0)
+
+local function statusAnchor()
+    local cam = workspace.CurrentCamera
+    if not cam then return Vector2.zero end
+    return (cam.ViewportSize / 2) + Vector2.new(config.ragestatus.staticOffsetX or 0, config.ragestatus.staticOffsetY or 0)
+end
+
+RunService.RenderStepped:Connect(function()
+    if not config.ragestatus.enabled then
+        statusLine1.Visible = false
+        statusLine2.Visible = false
+        return
+    end
+    statusLine1.Size = config.ragestatus.textSize
+    statusLine2.Size = config.ragestatus.textSize
+    statusLine1.Color = config.ragestatus.color
+    statusLine2.Color = config.ragestatus.color
+
+    local line1, line2
+    if config.state.reloading then
+        line1 = "ragebot: reloading..."
+    elseif config.voidspam.enabled and config.voidspam.phase == "hide" then
+        line1 = "ragebot: void"
+    elseif config.target.enabled and config.target.character then
+        local nm = config.target.lastplayer and config.target.lastplayer.Name or "target"
+        line1 = "ragebot: killing " .. nm .. "..."
+    else
+        line1 = "ragebot: idle"
+    end
+
+    local cur, maxA = getammo()
+    local ammoStr = cur ~= nil and string.format("%d/%d", math.floor(cur), math.max(math.floor(maxA or 0), 0)) or "?/?"
+    local hp = "?"
+    if config.target.character then
+        local h = config.target.character:FindFirstChildOfClass("Humanoid")
+        if h then hp = string.format("%.0f", h.Health) end
+    end
+    local killStr = config.ragestatus.showKills and string.format(" [%d]", config.kills.count) or ""
+    line2 = string.format("%s/%s%s", ammoStr, hp, killStr)
+
+    local anchor = statusAnchor()
+    local gap = config.ragestatus.lineGap
+    statusLine1.Text = line1
+    statusLine1.Position = anchor + Vector2.new(0, -gap/2)
+    statusLine1.Visible = true
+    statusLine2.Text = line2
+    statusLine2.Position = anchor + Vector2.new(0, gap/2)
+    statusLine2.Visible = true
+end)
+
+print("[Ragebot] Loaded for Linoria UI")
