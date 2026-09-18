@@ -1,0 +1,238 @@
+-- hunter vs hunter cfg — drop after the Lua X menu loads
+-- run once after the UI finishes building
+
+local _T = Toggles
+local function on(n) if _T[n] then pcall(function() _T[n]:SetValue(true) end) end end
+local function off(n) if _T[n] then pcall(function() _T[n]:SetValue(false) end) end end
+
+-- ============ VOID + VOID KILLER ============
+on("VoidToggle")
+CFG.VOID_METHOD = "Quantum"
+CFG.VOID_KILLER_ENABLED = true
+CFG.VOID_KILLER_SNAP_TO_MAP = true
+CFG.VOID_KILLER_FORCE_HITBOX = true
+CFG.VOID_KILLER_AUTO_SHOOT = true
+CFG.VOID_KILLER_AUTO_AIM = true
+CFG.VOID_KILLER_FREEZE_TARGET = true
+CFG.VOID_KILLER_NETWORK_OWN = true
+CFG.VOID_KILLER_NO_CLIP = true
+CFG.VOID_KILLER_HITBOX_SIZE = 800
+CFG.VOID_STAY_IN_REGION = false
+CFG.VOID_ANTIVOID = true
+CFG.VOID_ANTIFLING = true
+startVoid()
+
+-- ============ ORBIT (hunter mirror) ============
+on("OrbitToggle")
+cfg.orbitMode = "Figure 8"        -- hard for their prediction to read
+cfg.orbitTarget = "Closest"
+cfg.orbitSpeed = 480
+cfg.orbitDist = 12
+cfg.orbitHeight = 3
+cfg.orbitPredict = true
+cfg.orbitPredStr = 0.25
+cfg.orbitVelZero = true
+cfg.orbitNoClip = true
+cfg.orbitNetworkOwn = true
+cfg.orbitAutoShoot = true
+cfg.orbitAutoAim = true
+cfg.orbitAttackRange = 1e15
+cfg.orbitShootCooldown = 0.01
+startOrbit()
+
+-- ============ PREDICTION V2 (read their shots) ============
+on("PredToggle")
+cfgDodge.predRadius = 400
+cfgDodge.predDodgeDist = 140
+cfgDodge.predCooldown = 0.02
+cfgDodge.predReactTime = 0.04        -- faster than human
+cfgDodge.predShootDot = 0.70
+cfgDodge.predRaycast = true
+cfgDodge.predPredictiveAim = true
+cfgDodge.predPredictiveLead = 0.15
+cfgDodge.predAnimDetect = true
+cfgDodge.predReactionLadder = true
+cfgDodge.predInfiniteRange = true
+cfgDodge.predNotifyAnywhere = false  -- no noise
+cfgDodge.predNoClip = true
+cfgDodge.predNetworkOwn = true
+cfgDodge.predAutoShoot = true
+cfgDodge.predAutoAim = true
+startPredictionV2()
+
+-- ============ ANTI BAIT V2 (bait THEIR hooks) ============
+on("AntiBaitToggle")
+antiBaitCFG.dodgeMode = "Perpendicular"
+antiBaitCFG.baitEnabled = true
+antiBaitCFG.baitHookActivate = true
+antiBaitCFG.baitFakeLock = true
+antiBaitCFG.baitStallChance = 0.5
+antiBaitCFG.baitReactionWindow = 0.12
+antiBaitCFG.baitStallTime = 0.06
+antiBaitCFG.velSpikeEnabled = true
+antiBaitCFG.flickerEnabled = true
+antiBaitCFG.dodgeOnShoot = true
+antiBaitCFG.gunPredEnabled = true
+antiBaitCFG.gunPredDot = 0.72
+antiBaitCFG.gunPredCooldown = 0.01
+antiBaitCFG.antiBaitUniversalAim = true
+antiBaitCFG.antiBaitUniversalAnimation = true
+antiBaitCFG.antiBaitUniversalVelocity = true
+antiBaitCFG.infiniteRange = true
+antiBaitCFG.notifyOnDodge = false
+antiBaitCFG.notifyBaitConfirmed = false
+antiBaitCFG.dodgeCooldown = 0.02
+antiBaitCFG.antiBaitNoClip = true
+antiBaitCFG.antiBaitNetworkOwn = true
+antiBaitCFG.antiBaitPhaseThrough = true
+startAntiBaitV2()
+
+-- ============ ANTI-AIM (make silent aim miss) ============
+on("AaToggle")
+aaSettings.mode = "RandomSpin"
+aaSettings.enhancedMode = true
+aaSettings.multiAxisSpin = true
+aaSettings.chaosMode = true
+aaSettings.lookAtRandom = true
+aaSettings.randomSpeed = true
+aaSettings.speed = 5000
+aaSettings.enhancedJitterAmp = 90
+aaSettings.enhancedJitterSpeed = 60
+aaSettings.chaosInterval = 0.03
+aaSettings.lookAtRandomInterval = 0.05
+aaSettings.desyncMode = true
+aaSettings.desyncOffset = 180
+aaSettings.aaNoClip = true
+aaSettings.aaNetworkOwn = true
+startAntiAim()
+
+-- ============ RANGE EXTENDER (out-reach their range) ============
+on("RangeExtToggle")
+rangeExtCFG.range = 5e12
+rangeExtCFG.hitboxSize = 800
+rangeExtCFG.hitboxTransparency = 1     -- invisible
+rangeExtCFG.expandHitboxes = true
+rangeExtCFG.patchRaycast = true
+rangeExtCFG.patchWeaponValues = true
+rangeExtCFG.includeSelf = true
+rangeExtCFG.rivalsBreakHitbox = true
+rangeExtCFG.rivalsBreakSize = 2500
+rangeExtCFG.rangeExtNoClip = true
+rangeExtCFG.rangeExtNetworkOwn = true
+startRangeExt()
+
+-- ============ VELOCITY DESYNC (break their aimbot tracking) ============
+on("VelDesyncToggle")
+velDesyncCFG.intensity = 80
+velDesyncCFG.angle = 90
+velDesyncCFG.jitter = 45
+velDesyncCFG.speed = 30
+velDesyncCFG.oscillate = true
+velDesyncCFG.oscillateFreq = 8
+velDesyncCFG.oscillateAmp = 60
+velDesyncCFG.multiVector = true
+velDesyncCFG.vectorCount = 5
+velDesyncCFG.counterVel = true
+velDesyncCFG.rotateVel = true
+velDesyncCFG.noiseVel = true
+velDesyncCFG.burstDesync = true
+velDesyncCFG.burstEvery = 0.05
+velDesyncCFG.vdNoClip = true
+velDesyncCFG.vdNetworkOwn = true
+startVelDesync()
+
+-- ============ TRANSLOCATION (ESP flicker) ============
+on("TranslocToggle")
+translocCFG.offsetMode = "Orbit"
+translocCFG.frequency = 2048
+translocCFG.offsetDist = 1e15
+translocCFG.layers = 20
+translocCFG.fakeVel = true
+translocCFG.fakeVelMag = 1e15
+translocCFG.snapBack = true
+translocCFG.jitter = true
+translocCFG.jitterAmp = 1e14
+translocCFG.orbitFake = true
+translocCFG.orbitSpeed = 360
+translocCFG.orbitRadius = 1e11
+translocCFG.autoDodge = true
+translocCFG.autoDodgeRadius = 80
+translocCFG.translocNoClip = true
+translocCFG.translocNetworkOwn = true
+translocCFG.rivalsMode = true
+translocCFG.rivalsTranslocFreq = 2048
+translocCFG.rivalsTranslocLayers = 20
+translocCFG.rivalsFakeVelMag = 1e15
+startTransloc()
+
+-- ============ ANTI TRANSLOC (they will transloc too) ============
+on("AntiTranslocToggle")
+antiTranslocCFG.mode = "Evade"
+antiTranslocCFG.detectRadius = 300
+antiTranslocCFG.detectWindow = 0.4
+antiTranslocCFG.minTps = 2
+antiTranslocCFG.dodgeDistance = 60
+antiTranslocCFG.dodgeCooldown = 0.05
+antiTranslocCFG.spinEvade = true
+antiTranslocCFG.spinEvadeSpeed = 720
+antiTranslocCFG.multiDodge = true
+antiTranslocCFG.multiDodgeCount = 5
+antiTranslocCFG.atNoClip = true
+antiTranslocCFG.atNetworkOwn = true
+antiTranslocCFG.notify = false
+startAntiTransloc()
+
+-- ============ SLING BYPASS V2 (no-tp mode = undetectable) ============
+on("SlingToggle")
+slingCFG.mode = "Follow"
+slingCFG.targetMode = "Closest"
+slingCFG.noTpMode = true                    -- key: no teleport = no server-side flag
+slingCFG.noTpRange = 1e15
+slingCFG.noTpHitboxSize = 3000
+slingCFG.noTpAutoShoot = true
+slingCFG.noTpSilentAim = true
+slingCFG.noTpOriginSpoof = true
+slingCFG.noTpRaycastPatch = true
+slingCFG.noTpShotRedirect = true
+slingCFG.noTpLookVector = true
+slingCFG.noTpVelocityComp = true
+slingCFG.noTpGravityComp = true
+slingCFG.noTpInfiniteRange = true
+slingCFG.noTpInstantHit = true
+slingCFG.noTpHitscanOverride = true
+slingCFG.noTpWallBang = true
+slingCFG.noTpTargetLock = true
+slingCFG.hideAvatar = true
+slingCFG.slingNoClip = true
+slingCFG.slingNetworkOwn = true
+startSlingBypassV2()
+
+-- ============ RIOT ABUSER (close-range dominance) ============
+on("RiotAbuserToggle")
+riotAbuserCFG.mode = "Orbit"
+riotAbuserCFG.orbitRadius = 6
+riotAbuserCFG.orbitSpeed = 360
+riotAbuserCFG.orbitHeight = 2
+riotAbuserCFG.autoShoot = true
+riotAbuserCFG.attackRange = 1e15
+riotAbuserCFG.shootCooldown = 0.01
+riotAbuserCFG.forceFaceTarget = true
+riotAbuserCFG.raNoClip = true
+riotAbuserCFG.raNetworkOwn = true
+startRiotAbuser()
+
+-- ============ RIOT GODMODE (panic button, off by default) ============
+off("RiotGodmodeToggle")   -- toggle manually when getting swarmed
+
+-- ============ SMART EVASION V2 ============
+on("SmartEvasionToggle")
+CFG.SMART_EVASION = true
+CFG.SMART_EVASION_INF = true
+CFG.EVASION_RANGE = 200
+CFG.EVASION_THREAT_DIST = 60
+CFG.EVASION_COOLDOWN = 0.02
+CFG.EVASION_LAYERED = true
+CFG.EVASION_THREAT_SCALE = true
+CFG.EVASION_NOTIFY = false
+
+Notify("hunter cfg loaded — mirror-lock ready", 5)
